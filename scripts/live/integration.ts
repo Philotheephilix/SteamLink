@@ -703,24 +703,6 @@ export async function runIntegration(t: IntegrationTarget): Promise<number> {
   // delegationHash until a redemption pushes the cumulative spend past 10.
   log.step("TEST 9 — lifetime cap rejects the redemption that crosses totalCap");
   {
-    let signed: import("@nexus/core").SignedDelegation | undefined;
-    let delegationHash: Hex | undefined;
-    // Poll the enforcer's cumulative spend until it reflects the expected value,
-    // so the NEXT charge's gas-estimation sees fresh state (deterministic revert).
-    const waitSpent = async (expected: bigint) => {
-      if (!delegationHash) return;
-      for (let i = 0; i < 20; i++) {
-        const spent = await pub.readContract({
-          address: addrs.enforcers.erc20TransferAmount,
-          abi: SPENT_MAP_ABI,
-          functionName: "spentMap",
-          args: [delegationHash],
-        });
-        if (spent >= expected) return;
-        await new Promise((r) => setTimeout(r, 1000));
-      }
-    };
-
     // 0.4 + 0.4 = 0.8 (ok), third 0.4 → 1.2 > totalCap 1 → must revert.
     const r1 = await withRetry(
       () =>
@@ -735,13 +717,27 @@ export async function runIntegration(t: IntegrationTarget): Promise<number> {
         }),
       "TEST9 charge 1",
     );
-    signed = r1.signed;
-    delegationHash = await pub.readContract({
+    const signed = r1.signed;
+    const delegationHash = (await pub.readContract({
       address: addrs.delegationManager,
       abi: MANAGER_VIEW_ABI,
       functionName: "getDelegationHash",
       args: [signed],
-    });
+    })) as Hex;
+    // Poll the enforcer's cumulative spend until it reflects the expected value,
+    // so the NEXT charge's gas-estimation sees fresh state (deterministic revert).
+    const waitSpent = async (expected: bigint) => {
+      for (let i = 0; i < 20; i++) {
+        const spent = await pub.readContract({
+          address: addrs.enforcers.erc20TransferAmount,
+          abi: SPENT_MAP_ABI,
+          functionName: "spentMap",
+          args: [delegationHash],
+        });
+        if (spent >= expected) return;
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+    };
     await waitSpent(400_000n);
 
     await withRetry(

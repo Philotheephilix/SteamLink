@@ -1,4 +1,6 @@
+import { MANAGER_ABI } from "@nexus/core";
 import { NexusError } from "@nexus/types";
+import { decodeFunctionData } from "viem";
 import { describe, expect, it } from "vitest";
 import { type Backend, createBackend, createGatewayApp } from "../src/index.js";
 import {
@@ -117,7 +119,18 @@ describe("gateway routes (Hono test client)", () => {
     const out = (await res.json()) as { callId: string };
     expect(out.callId).toMatch(/^fake-/);
     expect(relayer.bundles).toHaveLength(1);
-    expect(lastBundle(relayer).delegationContext).toBeTruthy();
+    const bundle = lastBundle(relayer);
+    expect(bundle.delegationContext).toBeTruthy();
+    // The bundle MUST be a real on-chain redemption: a `redeemDelegations` call
+    // addressed to the delegation manager (delegation.to == relayer targetAddress),
+    // NOT the raw execution broadcast straight to the manager.
+    const call = bundle.encodedTxns[0]!;
+    expect(call.to).toBe(TARGET);
+    const decoded = decodeFunctionData({ abi: MANAGER_ABI, data: call.data });
+    expect(decoded.functionName).toBe("redeemDelegations");
+    // redeemDelegations(permissionContexts[], modes[], executionCalldatas[])
+    expect((decoded.args[0] as readonly unknown[]).length).toBe(1);
+    expect((decoded.args[2] as readonly unknown[]).length).toBe(1);
   });
 
   it("returns 402 challenge body when a SIGNED /charge is issued without prior payment", async () => {
@@ -143,6 +156,15 @@ describe("gateway routes (Hono test client)", () => {
     expect(out.challenge.price).toBe("5");
     expect(out.challenge.nonce).toBeTruthy();
     expect(relayer.bundles).toHaveLength(1);
+    // The charge bundle MUST be a real `redeemDelegations` call to the manager
+    // (delegation.to), wrapping the budget transferFrom execution — not a raw
+    // ERC-20 transfer broadcast to the token.
+    const bundle = lastBundle(relayer);
+    const call = bundle.encodedTxns[0]!;
+    expect(call.to).toBe(TARGET);
+    expect(bundle.requireTarget).toBe(true);
+    const decoded = decodeFunctionData({ abi: MANAGER_ABI, data: call.data });
+    expect(decoded.functionName).toBe("redeemDelegations");
   });
 
   it("rejects an unsigned /charge (C5)", async () => {

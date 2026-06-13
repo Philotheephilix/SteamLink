@@ -1,4 +1,8 @@
-import { encodePermissionContext } from "@nexus/core";
+import {
+  buildChargeFromExecution,
+  buildRedeemCalldata,
+  encodePermissionContext,
+} from "@nexus/core";
 import type { Bundle, RelayerAdapter } from "@nexus/relayer";
 import type { Challenge402, FacilitatorAdapter } from "@nexus/server";
 import { type Address, type Hex, NexusError } from "@nexus/types";
@@ -7,20 +11,8 @@ import type { SessionStore } from "../rooms/store.js";
 import type { SignedDelegation } from "../types.js";
 import type { AwaitingRegistry } from "./awaiting.js";
 import type { Accepted } from "./move.js";
+import { normalizeSignedDelegation } from "./normalize.js";
 import type { WebhookLedger } from "./webhook.js";
-
-const ERC20_TRANSFER_ABI = [
-  {
-    type: "function",
-    name: "transfer",
-    inputs: [
-      { name: "to", type: "address" },
-      { name: "amount", type: "uint256" },
-    ],
-    outputs: [{ name: "", type: "bool" }],
-    stateMutability: "nonpayable",
-  },
-] as const;
 
 export interface ChargeRequest {
   game: string;
@@ -44,12 +36,6 @@ export interface ChargeDeps {
 export interface ChargeAccepted extends Accepted {
   /** The 402 challenge that gates the charge (replayed to the SDK). */
   challenge: Challenge402;
-}
-
-function usdcToUnits(human: string): bigint {
-  const [whole, frac = ""] = human.split(".");
-  const padded = `${frac}000000`.slice(0, 6);
-  return BigInt(whole || "0") * 10n ** 6n + BigInt(padded || "0");
 }
 
 /**
@@ -87,18 +73,32 @@ export async function handleCharge(req: ChargeRequest, deps: ChargeDeps): Promis
   const delegationContext =
     "kind" in session.delegation.signed
       ? undefined
-      : encodePermissionContext(session.delegation.signed as SignedDelegation);
+      : encodePermissionContext(
+          normalizeSignedDelegation(session.delegation.signed as SignedDelegation),
+        );
+  if (!delegationContext) {
+    throw new NexusError(
+      "INVALID_CONFIG",
+      "charge redemption requires a signed delegation (no permission context for relayer-ref session)",
+    );
+  }
 
-  const { encodeFunctionData } = await import("viem");
-  const data = encodeFunctionData({
-    abi: ERC20_TRANSFER_ABI,
-    functionName: "transfer",
-    args: [req.to, usdcToUnits(req.amount)],
-  }) as Hex;
+  // Build a REAL on-chain redemption: the budget delegation authorizes the manager
+  // to move the PAYER's USDC via `transferFrom(payer, recipient, amount)`, wrapped
+  // as a single packed execution and submitted as `manager.redeemDelegations(...)`.
+  // The relayer broadcasts the bundle as-is (no context wrapping for self-relay), so
+  // the call MUST be addressed to the delegation manager (`session.delegation.to`).
+  const execution = buildChargeFromExecution(
+    { usdc } as Parameters<typeof buildChargeFromExecution>[0],
+    session.player,
+    req.to,
+    req.amount,
+  );
+  const data = buildRedeemCalldata(delegationContext, execution);
 
   const bundle: Bundle = {
     delegationContext,
-    encodedTxns: [{ to: usdc, data, value: 0n }],
+    encodedTxns: [{ to: session.delegation.to, data, value: 0n }],
     // H4: this is a MONEY bundle — force the relayer's targetAddress guard (hard
     // reject if the delegation target can't be determined) and dedupe by a
     // deterministic key so a retried submit cannot double-charge.

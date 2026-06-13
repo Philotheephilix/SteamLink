@@ -6,13 +6,18 @@
   "scripts": {
     "preflight": "tsx preflight.ts",
     "live": "tsx live/run-all.ts",
+    "e2e": "tsx live/e2e.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@nexus/backend": "workspace:*",
     "@nexus/core": "workspace:*",
     "@nexus/relayer": "workspace:*",
+    "@nexus/secrets": "workspace:*",
+    "@nexus/server": "workspace:*",
     "@nexus/types": "workspace:*",
     "dotenv": "^16.4.7",
+    "hono": "^4.6.14",
     "viem": "^2.21.55"
   },
   "devDependencies": {

@@ -28,6 +28,16 @@ import {
  *   POST /nexus/webhook            → WebhookHandler.ingest
  *   GET  /healthz /readyz          → ops
  */
+/**
+ * Serialize a response body as JSON, tolerating BigInt values. Indexer rows carry
+ * on-chain `uint256` fields as `bigint`, which Hono's `c.json` cannot serialize;
+ * we stringify with a BigInt→decimal-string replacer and set the JSON content type.
+ */
+function jsonResponse(c: Context, body: unknown, status: number): Response {
+  const text = JSON.stringify(body, (_k, v) => (typeof v === "bigint" ? v.toString() : v));
+  return c.body(text, status as never, { "content-type": "application/json" });
+}
+
 export function createGatewayApp(backend: Backend): Hono {
   const app = new Hono();
 
@@ -56,7 +66,8 @@ export function createGatewayApp(backend: Backend): Hono {
       const out = await terminal(r);
       return { status: out.status, body: out.body };
     });
-    return c.json(result.body as never, result.status as never);
+    // BigInt-safe: indexer state rows carry uint256 fields as bigint.
+    return jsonResponse(c, result.body, result.status);
   };
 
   app.post("/game/:name/join", async (c) => {

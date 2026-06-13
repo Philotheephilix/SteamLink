@@ -1,10 +1,11 @@
-import { encodePermissionContext } from "@nexus/core";
+import { buildRedeemCalldata, encodePermissionContext } from "@nexus/core";
 import type { Bundle, RelayerAdapter } from "@nexus/relayer";
 import { type Address, type Hex, NexusError } from "@nexus/types";
 import type { RoomService } from "../rooms/RoomService.js";
 import type { SessionStore } from "../rooms/store.js";
 import type { SignedDelegation } from "../types.js";
 import type { AwaitingRegistry } from "./awaiting.js";
+import { normalizeSignedDelegation } from "./normalize.js";
 import type { WebhookLedger } from "./webhook.js";
 
 export interface MoveRequest {
@@ -55,13 +56,30 @@ export async function handleMove(req: MoveRequest, deps: MoveDeps): Promise<Acce
   const delegationContext =
     "kind" in session.delegation.signed
       ? undefined
-      : encodePermissionContext(session.delegation.signed as SignedDelegation);
+      : encodePermissionContext(
+          normalizeSignedDelegation(session.delegation.signed as SignedDelegation),
+        );
 
-  const encodedTxns =
-    req.encodedTxns ??
-    (req.encodedExecution
-      ? [{ to: session.delegation.to, data: req.encodedExecution, value: 0n }]
-      : []);
+  // Build a REAL on-chain redemption. The relayer broadcasts `encodedTxns` as-is
+  // (it does not wrap a delegationContext for self-relay), so the bundle MUST be a
+  // `manager.redeemDelegations(permissionContext, execution)` call addressed to the
+  // delegation manager — exactly the proven scripts/live flow. `session.delegation.to`
+  // is the manager (validated to equal the relayer's targetAddress at join).
+  let encodedTxns: { to: Address; data: Hex; value?: bigint }[];
+  if (req.encodedTxns) {
+    encodedTxns = req.encodedTxns;
+  } else if (req.encodedExecution) {
+    if (!delegationContext) {
+      throw new NexusError(
+        "INVALID_CONFIG",
+        "move redemption requires a signed delegation (no permission context for relayer-ref session)",
+      );
+    }
+    const redeemCalldata = buildRedeemCalldata(delegationContext, req.encodedExecution);
+    encodedTxns = [{ to: session.delegation.to, data: redeemCalldata, value: 0n }];
+  } else {
+    encodedTxns = [];
+  }
   if (encodedTxns.length === 0) {
     throw new NexusError("INVALID_CONFIG", "move has no encoded execution");
   }
