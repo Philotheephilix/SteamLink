@@ -439,7 +439,11 @@ function extractTarget(bundle: Bundle): string | undefined {
     const t = o.to ?? o.target;
     if (typeof t === "string") return t;
   }
-  return undefined;
+  // Fall back to the on-chain redemption target: the `to` of the first encoded
+  // call. For Nexus this is the NexusDelegationManager — the exact address the
+  // relayer must be configured to accept (capabilities.targetAddress). The
+  // delegationContext is an opaque permission blob and carries no readable target.
+  return bundle.encodedTxns[0]?.to;
 }
 
 /**

@@ -99,6 +99,11 @@ export async function handleCharge(req: ChargeRequest, deps: ChargeDeps): Promis
   const bundle: Bundle = {
     delegationContext,
     encodedTxns: [{ to: usdc, data, value: 0n }],
+    // H4: this is a MONEY bundle — force the relayer's targetAddress guard (hard
+    // reject if the delegation target can't be determined) and dedupe by a
+    // deterministic key so a retried submit cannot double-charge.
+    requireTarget: true,
+    idempotencyKey: `charge:${session.roomId}:${challenge.nonce}`,
     ...(deps.webhookUrl ? { destinationUrl: deps.webhookUrl } : {}),
   };
   const handle = await deps.relayer.submitBundle(bundle);

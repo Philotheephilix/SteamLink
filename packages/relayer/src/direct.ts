@@ -41,6 +41,7 @@ export interface DirectRelayerConfig {
  */
 export class DirectRelayer implements RelayerAdapter {
   private readonly listeners = new Set<(e: StatusEvent) => void>();
+  private readonly submittedByKey = new Map<string, BundleHandle>();
   private seq = 0;
 
   constructor(private readonly cfg: DirectRelayerConfig) {}
@@ -59,6 +60,17 @@ export class DirectRelayer implements RelayerAdapter {
     const bundleId = `direct-${Date.now()}-${this.seq++}`;
     if (bundle.encodedTxns.length === 0) {
       throw new NexusError("RELAYER_FAILED", "bundle has no transactions");
+    }
+    // H4: dedupe money bundles by idempotency key so a retried submit can't double-pay.
+    if (bundle.idempotencyKey) {
+      const prior = this.submittedByKey.get(bundle.idempotencyKey);
+      if (prior) return prior;
+    }
+    // H4: a money bundle must have a determinable on-chain target (the `to` of the
+    // first call). Self-relay has no fixed targetAddress to match, but we still
+    // hard-reject an indeterminable money target rather than blindly broadcasting.
+    if (bundle.requireTarget && !bundle.encodedTxns[0]?.to) {
+      throw new NexusError("TARGET_MISMATCH", "money bundle has no determinable target");
     }
     let lastHash: Hex | undefined;
     // Self-relay submits each encoded call as a real transaction, in order.
@@ -80,7 +92,9 @@ export class DirectRelayer implements RelayerAdapter {
         });
       }
     }
-    return { bundleId, txHash: lastHash };
+    const handle = { bundleId, txHash: lastHash };
+    if (bundle.idempotencyKey) this.submittedByKey.set(bundle.idempotencyKey, handle);
+    return handle;
   }
 
   private async watch(bundleId: string, hash: Hex): Promise<void> {
