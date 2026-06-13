@@ -40,8 +40,8 @@ export interface IntegrationTarget {
   relayer: { key: Hex; address: Address };
   /** The player — signs ONE delegation, never pays gas, needs no funding. */
   player: { key: Hex; address: Address };
-  /** A second seat so the turn rotates after the first move. */
-  player2Address: Address;
+  /** A second seat; also signs its own delegations for the full game-to-win test. */
+  player2: { key: Hex; address: Address };
 }
 
 const COUNTER_ABI = [
@@ -62,6 +62,14 @@ const COUNTER_ABI = [
       { name: "roomId", type: "uint256", indexed: true },
       { name: "player", type: "address", indexed: true },
       { name: "value", type: "uint256", indexed: false },
+    ],
+  },
+  {
+    type: "event",
+    name: "CounterGame_Won",
+    inputs: [
+      { name: "roomId", type: "uint256", indexed: true },
+      { name: "winner", type: "address", indexed: true },
     ],
   },
 ] as const;
@@ -144,7 +152,7 @@ export async function runIntegration(t: IntegrationTarget): Promise<number> {
     rpcUrl: t.rpcUrl,
     deployerKey: t.relayer.key,
     player: t.player.address,
-    player2: t.player2Address,
+    player2: t.player2.address,
     roomId: 1n,
     chainId: t.chainId,
   });
@@ -161,15 +169,16 @@ export async function runIntegration(t: IntegrationTarget): Promise<number> {
   const relayer = new DirectRelayer({ wallet: relayerWallet, publicClient: pub, usdc: addrs.usdc });
 
   const future = Date.now() + 3 * 3600_000;
-  const innerMove = encodeFunctionData({
-    abi: COUNTER_ABI,
-    functionName: "increment",
-    args: [d.roomId, TARGET_VALUE],
-  });
+  const player2 = privateKeyToAccount(t.player2.key);
 
-  async function redeemMove(cfg: GameDelegationConfig, salt = 0n) {
+  async function redeemMove(
+    cfg: GameDelegationConfig,
+    salt = 0n,
+    signer = player,
+    target = TARGET_VALUE,
+  ) {
     const caveats = buildGameplayCaveats(cfg, addrs, d.roomId);
-    const signed = await signDelegation(player, {
+    const signed = await signDelegation(signer, {
       chainId: t.chainId,
       delegationManager: addrs.delegationManager,
       delegate: t.relayer.address,
@@ -177,7 +186,12 @@ export async function runIntegration(t: IntegrationTarget): Promise<number> {
       salt,
     });
     const ctx = encodePermissionContext(signed);
-    const exec = buildMoveExecution(addrs, d.counterGameSystemId, innerMove);
+    const move = encodeFunctionData({
+      abi: COUNTER_ABI,
+      functionName: "increment",
+      args: [d.roomId, target],
+    });
+    const exec = buildMoveExecution(addrs, d.counterGameSystemId, move);
     const data = buildRedeemCalldata(ctx, exec);
     const handle = await relayer.submitBundle({
       encodedTxns: [{ to: addrs.delegationManager, data }],
@@ -290,6 +304,37 @@ export async function runIntegration(t: IntegrationTarget): Promise<number> {
 
   log.step("TEST 4 — TurnBoundEnforcer rejects a move out of turn");
   await expectRevert("TurnBound", configFor(d.counterGameSystemId, future), "NotYourTurn", 4n);
+
+  // TEST 5 — a FULL multi-player game played gaslessly to a win. After TEST 1 the
+  // counter is 1 and it is player2's turn. With target 3: player2→2, player1→3 wins.
+  // Both players sign their own delegations; the relayer redeems both. Neither pays gas.
+  log.step("TEST 5 — full multi-player game to a win (both players gasless)");
+  {
+    const cfg = configFor(d.counterGameSystemId, future);
+    const p1Before = await pub.getBalance({ address: player.address });
+    const p2Before = await pub.getBalance({ address: player2.address });
+
+    await redeemMove(cfg, 50n, player2, 3n); // player2: counter 1 -> 2
+    const winReceipt = await redeemMove(cfg, 51n, player, 3n); // player1: counter 2 -> 3, wins
+
+    const won = parseEventLogs({
+      abi: COUNTER_ABI,
+      eventName: "CounterGame_Won",
+      logs: winReceipt.logs,
+    });
+    assert(won.length === 1, "expected a CounterGame_Won event");
+    assert(
+      won[0]!.args.winner.toLowerCase() === player.address.toLowerCase(),
+      `winner ${won[0]!.args.winner}, expected player1 ${player.address}`,
+    );
+    const p1After = await pub.getBalance({ address: player.address });
+    const p2After = await pub.getBalance({ address: player2.address });
+    assert(
+      p1Before === p1After && p2Before === p2After,
+      "both players paid ZERO gas across the game",
+    );
+    log.ok("game played to completion gaslessly — player1 won, both players spent 0 gas");
+  }
 
   log.title(
     failures === 0 ? `${t.label}: ALL LIVE TESTS PASSED` : `${t.label}: ${failures} FAILED`,

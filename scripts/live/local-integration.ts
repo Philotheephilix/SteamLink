@@ -28,7 +28,10 @@ async function main() {
         key: ANVIL_ACCOUNTS.player.key as Hex,
         address: ANVIL_ACCOUNTS.player.address as Address,
       },
-      player2Address: ANVIL_ACCOUNTS.player2.address as Address,
+      player2: {
+        key: ANVIL_ACCOUNTS.player2.key as Hex,
+        address: ANVIL_ACCOUNTS.player2.address as Address,
+      },
     };
     failures = await runIntegration(target);
   } finally {

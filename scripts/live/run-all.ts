@@ -39,7 +39,10 @@ async function runLocal(): Promise<number> {
         key: ANVIL_ACCOUNTS.player.key as Hex,
         address: ANVIL_ACCOUNTS.player.address as Address,
       },
-      player2Address: ANVIL_ACCOUNTS.player2.address as Address,
+      player2: {
+        key: ANVIL_ACCOUNTS.player2.key as Hex,
+        address: ANVIL_ACCOUNTS.player2.address as Address,
+      },
     });
   } finally {
     stop();
@@ -65,10 +68,11 @@ async function runOnChain(): Promise<number | "skipped"> {
     `Relayer ${env.account.address} funded with ${formatEther(bal)} ETH on ${env.chain.name}`,
   );
 
-  // The player only signs — generate throwaway keys (need no funds).
+  // The players only sign — generate throwaway keys (need no funds).
   const playerKey = generatePrivateKey();
   const player = privateKeyToAccount(playerKey);
-  const player2 = privateKeyToAccount(generatePrivateKey());
+  const player2Key = generatePrivateKey();
+  const player2 = privateKeyToAccount(player2Key);
   const target: IntegrationTarget = {
     label: env.chain.name,
     chain: env.chain,
@@ -76,7 +80,7 @@ async function runOnChain(): Promise<number | "skipped"> {
     chainId: env.chain.id,
     relayer: { key: env.privateKey as Hex, address: env.account.address as Address },
     player: { key: playerKey as Hex, address: player.address as Address },
-    player2Address: player2.address as Address,
+    player2: { key: player2Key as Hex, address: player2.address as Address },
   };
   return runIntegration(target);
 }
