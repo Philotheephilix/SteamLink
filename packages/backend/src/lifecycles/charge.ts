@@ -102,11 +102,17 @@ export async function handleCharge(req: ChargeRequest, deps: ChargeDeps): Promis
     ...(deps.webhookUrl ? { destinationUrl: deps.webhookUrl } : {}),
   };
   const handle = await deps.relayer.submitBundle(bundle);
+  // C1: persist the redemption identity so a mined webhook is confirmed on-chain
+  // (facilitator.verify) BEFORE the charge is resolved as settled.
   await deps.ledger.claim({
     bundleId: handle.bundleId,
     roomId: session.roomId,
     kind: "charge",
     player: req.caller,
+    nonce: challenge.nonce,
+    payer: session.player as Hex,
+    ...(delegationContext ? { delegationContext } : {}),
+    ...(handle.txHash ? { txHash: handle.txHash } : {}),
   });
   void deps.awaiting.register(handle.bundleId);
 

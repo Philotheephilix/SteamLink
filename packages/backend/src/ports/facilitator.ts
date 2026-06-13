@@ -39,7 +39,19 @@ export class StubFacilitator implements FacilitatorAdapter {
 
   constructor(
     private readonly capabilities: RelayerCapabilities | (() => Promise<RelayerCapabilities>),
-  ) {}
+    opts: { allowUnsafeDev?: boolean } = {},
+  ) {
+    // C6: this stub does NOT verify anything on-chain. It must never be the
+    // money-safe default; refuse to construct unless the caller explicitly opts
+    // into unsafe dev behaviour.
+    if (!opts.allowUnsafeDev) {
+      throw new NexusError(
+        "INVALID_CONFIG",
+        "StubFacilitator does not verify settlements on-chain and is unsafe for money. " +
+          "Construct it only with { allowUnsafeDev: true }, or use DelegationFacilitator.",
+      );
+    }
+  }
 
   private async caps(): Promise<RelayerCapabilities> {
     return typeof this.capabilities === "function" ? this.capabilities() : this.capabilities;
@@ -74,22 +86,19 @@ export class StubFacilitator implements FacilitatorAdapter {
     };
   }
 
+  /**
+   * C6: NEVER fabricate `status:"settled"`. This stub cannot read the chain, so
+   * it cannot confirm a settlement — it always rejects. Use `DelegationFacilitator`
+   * (with a real publicClient) for any path that moves money.
+   */
   async verify(redemption: Redemption): Promise<Settlement> {
     const issued = this.issued.get(redemption.nonce);
     if (!issued) throw new NexusError("NONCE_REUSED", `unknown/used nonce ${redemption.nonce}`);
-    if (!redemption.txHash) {
-      throw new NexusError("SETTLEMENT_FAILED", "no txHash to verify", { retryable: true });
-    }
+    // Burn the nonce so a replay is also rejected, but DO NOT claim a settlement.
     this.issued.delete(redemption.nonce);
-    return {
-      nonce: redemption.nonce,
-      txHash: redemption.txHash,
-      blockNumber: 0,
-      amount: issued.amount,
-      token: issued.token,
-      from: redemption.payer,
-      to: issued.recipient,
-      status: "settled",
-    };
+    throw new NexusError(
+      "SETTLEMENT_FAILED",
+      "StubFacilitator cannot confirm settlement on-chain — no fabricated settlements (C6)",
+    );
   }
 }

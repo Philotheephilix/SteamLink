@@ -84,11 +84,18 @@ export function decodeStoreLog(
   const keyFields = schema.fields.filter((f) => f.key);
   const valueFields = schema.fields.filter((f) => !f.key);
 
+  // H5: the keyTuple length MUST match the declared key fields exactly. A short
+  // tuple was previously zero-filled — silently fabricating a (wrong) primary
+  // key. A long tuple is an unknown/forged encoding. Reject either.
+  if (keyTuple.length !== keyFields.length) {
+    return null;
+  }
+
   const key: Record<string, string | number | bigint | boolean | Hex> = {};
-  keyFields.forEach((f, i) => {
-    const raw = keyTuple[i];
-    key[f.name] = raw === undefined ? defaultForType(f.abiType) : decodeKeyWord(raw, f.abiType);
-  });
+  for (let i = 0; i < keyFields.length; i++) {
+    const f = keyFields[i] as IndexerTableSchema["fields"][number];
+    key[f.name] = decodeKeyWord(keyTuple[i] as Hex, f.abiType);
+  }
 
   const __block = Number(log.blockNumber);
   const __logIndex = log.logIndex;
@@ -97,22 +104,81 @@ export function decodeStoreLog(
     return { type: "delete", table: schema.table, key };
   }
 
-  // Store_SetRecord — decode the value tuple from staticData.
+  // Store_SetRecord — decode the value fields. Static (fixed-size) fields come
+  // from `staticData`; dynamic fields (string/bytes/arrays) come from
+  // `dynamicData`. Each is ABI-tuple-encoded in declared order (matching the
+  // World.sol `setRecord(tableId, key, staticData, dynamicData)` writer).
   const staticData = (decoded.args.staticData as Hex) ?? "0x";
-  const values =
-    valueFields.length > 0 && staticData !== "0x"
-      ? decodeAbiParameters(
-          valueFields.map((f) => ({ name: f.name, type: f.abiType })),
-          staticData,
-        )
-      : valueFields.map((f) => defaultForType(f.abiType));
+  const dynamicData = (decoded.args.dynamicData as Hex) ?? "0x";
+  const staticFields = valueFields.filter((f) => !isDynamicAbiType(f.abiType));
+  const dynamicFields = valueFields.filter((f) => isDynamicAbiType(f.abiType));
+
+  // H5: validate the staticData length matches the schema's static word count.
+  // In an ABI tuple of fixed-size types each field is exactly one 32-byte word.
+  // A length mismatch means the on-chain encoding does not match our schema —
+  // reject rather than mis-decode / zero-fill.
+  const expectedStaticBytes = staticFields.length * 32;
+  const staticByteLen = hexByteLength(staticData);
+  if (staticByteLen !== expectedStaticBytes) {
+    return null;
+  }
+
+  // H5: if the schema declares dynamic fields, decode them from dynamicData
+  // (previously ignored, which dropped/zero-filled them). If dynamicData is
+  // absent for a schema that requires it, reject.
+  if (dynamicFields.length > 0 && dynamicData === "0x") {
+    return null;
+  }
+
+  let staticValues: readonly unknown[];
+  try {
+    staticValues =
+      staticFields.length > 0
+        ? decodeAbiParameters(
+            staticFields.map((f) => ({ name: f.name, type: f.abiType })),
+            staticData,
+          )
+        : [];
+  } catch {
+    return null;
+  }
+
+  let dynamicValues: readonly unknown[];
+  try {
+    dynamicValues =
+      dynamicFields.length > 0
+        ? decodeAbiParameters(
+            dynamicFields.map((f) => ({ name: f.name, type: f.abiType })),
+            dynamicData,
+          )
+        : [];
+  } catch {
+    return null;
+  }
 
   const row: Record<string, unknown> = { ...key, __block, __logIndex };
-  valueFields.forEach((f, i) => {
-    row[f.name] = normalize(values[i], f.abiType);
+  staticFields.forEach((f, i) => {
+    row[f.name] = normalize(staticValues[i], f.abiType);
+  });
+  dynamicFields.forEach((f, i) => {
+    row[f.name] = normalize(dynamicValues[i], f.abiType);
   });
 
   return { type: "set", table: schema.table, key, row: row as never };
+}
+
+/** True for ABI types whose encoding is variable-length (dynamic). */
+function isDynamicAbiType(abiType: string): boolean {
+  if (abiType === "string" || abiType === "bytes") return true;
+  // Any array (`T[]` or `T[][]`) is dynamic; fixed-size `bytesN` is NOT.
+  if (abiType.endsWith("]")) return true;
+  return false;
+}
+
+/** Byte length of a `0x`-prefixed hex string. */
+function hexByteLength(hex: string): number {
+  const body = hex.startsWith("0x") ? hex.slice(2) : hex;
+  return Math.floor(body.length / 2);
 }
 
 /** Decode a single bytes32 key word into the field's JS shape. */
@@ -127,16 +193,6 @@ function decodeKeyWord(word: Hex, abiType: string): string | number | bigint | b
     return BigInt(word) !== 0n;
   }
   return word; // bytes32 / bytes / string keys stay hex
-}
-
-function defaultForType(abiType: string): string | number | bigint | boolean | Hex {
-  if (abiType === "address") return "0x0000000000000000000000000000000000000000" as Hex;
-  if (abiType === "bool") return false;
-  if (abiType === "string") return "";
-  if (abiType === "bytes32") return `0x${"00".repeat(32)}` as Hex;
-  if (abiType === "bytes") return "0x" as Hex;
-  if (abiType.startsWith("uint") || abiType.startsWith("int")) return 0n;
-  return 0;
 }
 
 /** Normalize a viem-decoded value to the wire shape we project. */

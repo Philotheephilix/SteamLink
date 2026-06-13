@@ -1,3 +1,4 @@
+import { resourceId } from "@nexus/core";
 import { type Address, NexusError } from "@nexus/types";
 import type { GameModule } from "../types.js";
 import type { GameDelegation } from "../types.js";
@@ -78,16 +79,22 @@ export function validateCaveats(
     );
   }
 
-  // ── system allowlist: must be present and stay within the game's systems ──
+  // ── system allowlist: every id must be an ACTUAL system of this game (M1) ──
   if (!gameplay.allowedSystems || gameplay.allowedSystems.length === 0) {
     throw new NexusError("CAVEATS_INVALID", "gameplay.allowedSystems empty — over-broad");
   }
-  const gameSystems = new Set(Object.keys(game.systems));
-  // allowedSystems are bytes32 ids; we sanity-bound the count to the game's systems.
-  if (gameplay.allowedSystems.length > gameSystems.size) {
-    throw new NexusError(
-      "CAVEATS_INVALID",
-      "gameplay.allowedSystems includes systems outside the game",
-    );
+  // The canonical bytes32 id set for the game's systems. Membership — not a count
+  // — is what gates the delegation: a count check let an attacker substitute an
+  // arbitrary system id and still pass.
+  const knownSystemIds = new Set(
+    Object.keys(game.systems).map((sys) => resourceId(game.name, "system", sys).toLowerCase()),
+  );
+  for (const id of gameplay.allowedSystems) {
+    if (!knownSystemIds.has(String(id).toLowerCase())) {
+      throw new NexusError(
+        "CAVEATS_INVALID",
+        `gameplay.allowedSystems includes unknown system id ${id} (not a system of game "${game.name}")`,
+      );
+    }
   }
 }

@@ -198,13 +198,36 @@ describe("LocalSecrets verify (legal move without reveal)", () => {
     });
   });
 
-  it("produces single-use incrementing nonces", async () => {
+  it("produces a fresh, non-colliding random nonce per attestation (replay-resistant)", async () => {
     const secrets = new LocalSecrets();
     const sealed = await secrets.seal(hand, ownerCondition);
     const a = await secrets.verify(sealed, { ...claimBase, playedCard: 10 });
     const b = await secrets.verify(sealed, { ...claimBase, playedCard: 10 });
     const na = decodeAttestationPayload(a.payload).nonce;
     const nb = decodeAttestationPayload(b.payload).nonce;
-    expect(nb).toBe(na + 1n);
+    // Two verifies of the same move must not share a nonce, so they cannot
+    // produce identical/replayable attestations.
+    expect(nb).not.toBe(na);
+    // Random 256-bit nonces are not a tiny counter near 0.
+    expect(na).toBeGreaterThan(1_000_000_000n);
+    expect(nb).toBeGreaterThan(1_000_000_000n);
+    // The whole signed payloads differ (nonce is part of the signed bytes).
+    expect(a.payload).not.toBe(b.payload);
+  });
+});
+
+describe("LocalSecrets default predicate fails closed (M2)", () => {
+  it("denies reveal when the owner state is missing (no state[method])", async () => {
+    const secrets = new LocalSecrets();
+    const sealed = await secrets.seal(new Uint8Array([1, 2, 3]), ownerCondition);
+    // No `state.ownerOf` resolved -> owner unknown -> must DENY (fail closed),
+    // not let the caller claim ownership.
+    await expect(secrets.reveal(sealed, { caller: ALICE, state: {} })).rejects.toMatchObject({
+      code: "REVEAL_DENIED",
+    });
+    // Also when state is entirely absent.
+    await expect(secrets.reveal(sealed, { caller: ALICE })).rejects.toMatchObject({
+      code: "REVEAL_DENIED",
+    });
   });
 });

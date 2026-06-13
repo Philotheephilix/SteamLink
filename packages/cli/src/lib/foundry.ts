@@ -38,18 +38,47 @@ export interface ForgeScriptParams {
 }
 
 /**
- * Invoke `forge script` exactly like scripts/lib/deploy.ts does — same binary,
- * same env-PATH shim, stdio inherited so the forge trace streams to the user.
+ * Build the `forge script` argv. The private key is DELIBERATELY excluded: a
+ * value passed as a process argument leaks via `ps`/`/proc/<pid>/cmdline` to any
+ * local user. It is instead delivered through the child process environment (see
+ * {@link forgeScriptEnv}) and read by the deploy script via
+ * `vm.startBroadcast(vm.envUint("PRIVATE_KEY"))`. Pure + exported so the absence
+ * of the key in argv is unit-testable.
  */
-export function runForgeScript(p: ForgeScriptParams): void {
-  const args = ["script", p.target, "--rpc-url", p.rpcUrl, "--private-key", p.privateKey];
+export function buildForgeScriptArgs(
+  p: Pick<ForgeScriptParams, "target" | "rpcUrl" | "broadcast" | "extraArgs">,
+): string[] {
+  const args = ["script", p.target, "--rpc-url", p.rpcUrl];
   if (p.broadcast) args.push("--broadcast", "--skip-simulation");
   if (p.extraArgs) args.push(...p.extraArgs);
+  return args;
+}
+
+/**
+ * Build the child environment for `forge script`, injecting the deployer key as
+ * `PRIVATE_KEY` so forge's env-based signing can pick it up without the key ever
+ * appearing in argv. The caller's extra env (ROOM_ID, etc.) is merged in.
+ */
+export function forgeScriptEnv(
+  privateKey: string,
+  extra?: Record<string, string>,
+): NodeJS.ProcessEnv {
+  return { ...foundryEnv(), PRIVATE_KEY: privateKey, ...(extra ?? {}) };
+}
+
+/**
+ * Invoke `forge script` exactly like scripts/lib/deploy.ts does — same binary,
+ * same env-PATH shim, stdio inherited so the forge trace streams to the user.
+ * The private key is passed via env (`PRIVATE_KEY`), never as argv, so it does
+ * not leak through `ps`.
+ */
+export function runForgeScript(p: ForgeScriptParams): void {
+  const args = buildForgeScriptArgs(p);
   try {
     execFileSync(FORGE, args, {
       cwd: p.cwd,
       stdio: "inherit",
-      env: { ...foundryEnv(), ...(p.env ?? {}) },
+      env: forgeScriptEnv(p.privateKey, p.env),
     });
   } catch (e) {
     throw new CliError(`forge script failed: ${(e as Error).message}`);

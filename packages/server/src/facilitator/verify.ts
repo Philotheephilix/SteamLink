@@ -11,6 +11,22 @@ import type { Settlement } from "../ports/facilitator.js";
  */
 export interface ReceiptReaderClient {
   getTransactionReceipt(args: { hash: Hex }): Promise<TransactionReceiptLike>;
+  /**
+   * Current chain head block number. Used to enforce a finality / confirmation
+   * depth (H2): a settlement is only accepted once it is buried under
+   * `minConfirmations` blocks, so a reorg can't unwind a tx we already credited.
+   * Optional so legacy callers / tests still type-check; when absent the depth
+   * check is skipped (and a warning-worthy `minConfirmations > 0` is honored only
+   * if present — see `verifyTransferOnChain`).
+   */
+  getBlockNumber?(): Promise<bigint>;
+  /**
+   * Read a block header (we only need its `timestamp`, in seconds). Used to bind
+   * the settlement to the challenge issuance time (H2): a tx mined BEFORE the
+   * challenge was issued cannot satisfy a freshly-minted nonce, defeating a
+   * "reuse a stale matching transfer" attack. Optional for the same reason.
+   */
+  getBlock?(args: { blockNumber: bigint }): Promise<{ timestamp: bigint }>;
 }
 
 export interface TransactionReceiptLike {
@@ -39,6 +55,18 @@ export interface VerifyTransferParams {
   price: string;
   /** Nonce echoed onto the returned Settlement. */
   nonce: Hex;
+  /**
+   * Minimum confirmation depth required for finality (H2). `0` disables the
+   * check. When `> 0` the client MUST expose `getBlockNumber`; otherwise verify
+   * fails closed (retryable) rather than crediting an unconfirmed tx.
+   */
+  minConfirmations?: number;
+  /**
+   * Epoch ms the challenge/nonce was issued. When set (and the client exposes
+   * `getBlock`), a tx whose block timestamp predates issuance is rejected — a
+   * stale matching transfer cannot satisfy a fresh nonce (H2).
+   */
+  issuedAt?: number;
 }
 
 /**
@@ -66,6 +94,41 @@ export async function verifyTransferOnChain(
     throw new NexusError("SETTLEMENT_FAILED", `tx reverted: ${params.txHash}`, {
       txHash: params.txHash,
     });
+  }
+
+  // ── finality / confirmation depth (H2) ──
+  const minConf = params.minConfirmations ?? 0;
+  if (minConf > 0) {
+    if (typeof client.getBlockNumber !== "function") {
+      throw new NexusError(
+        "SETTLEMENT_FAILED",
+        "confirmation-depth check required but client cannot read the chain head",
+        { txHash: params.txHash, retryable: true },
+      );
+    }
+    const head = await client.getBlockNumber();
+    // depth = head - mined + 1 (the mining block counts as 1 confirmation).
+    const depth = head - receipt.blockNumber + 1n;
+    if (depth < BigInt(minConf)) {
+      throw new NexusError(
+        "SETTLEMENT_FAILED",
+        `tx ${params.txHash} has ${depth} confirmation(s) < required ${minConf}`,
+        { txHash: params.txHash, retryable: true },
+      );
+    }
+  }
+
+  // ── issuance binding (H2): reject a tx mined before the challenge existed ──
+  if (params.issuedAt !== undefined && typeof client.getBlock === "function") {
+    const block = await client.getBlock({ blockNumber: receipt.blockNumber });
+    const minedAtMs = Number(block.timestamp) * 1000;
+    if (minedAtMs < params.issuedAt) {
+      throw new NexusError(
+        "SETTLEMENT_FAILED",
+        `tx ${params.txHash} mined at ${minedAtMs} predates challenge issuedAt ${params.issuedAt} — stale transfer cannot satisfy a fresh nonce`,
+        { txHash: params.txHash },
+      );
+    }
   }
 
   const token = getAddress(params.token);

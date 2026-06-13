@@ -21,11 +21,57 @@ function fromMicro(micro: bigint): string {
   return frac ? `${whole}.${frac}` : `${whole}`;
 }
 
-/** rake fraction in [0,1) from the game economy; 0 when no pot config. */
+/** One whole unit in basis points (100% = 10_000 bps). */
+const BPS_DENOMINATOR = 10_000n;
+
+/**
+ * Resolve the rake as an INTEGER number of basis points (bps) using pure string
+ * parsing — a money ratio is never passed through `Number()` (M5). Accepts:
+ *  - an integer bps string/number, e.g. "1000" or "250" (preferred, exact);
+ *  - a decimal fraction string, e.g. "0.1" (back-compat) → converted to bps
+ *    deterministically by string math (0.1 → 1000 bps), with at most 4 decimal
+ *    places of precision (1 bps); extra precision is rejected, not rounded.
+ * Returns bps in [0, 10000).
+ */
+export function rakeBps(economy: EconomyConfig | undefined): bigint {
+  const raw = economy?.pot?.rake;
+  if (raw === undefined || raw === null) return 0n;
+  const bps = parseRakeBps(String(raw));
+  if (bps < 0n || bps >= BPS_DENOMINATOR) {
+    throw new NexusError("INVALID_CONFIG", `bad rake (${raw}) — must be in [0, 100%)`);
+  }
+  return bps;
+}
+
+/** Parse a rake config string to integer bps via string math (no float). */
+function parseRakeBps(s: string): bigint {
+  const trimmed = s.trim();
+  if (trimmed === "") return 0n;
+  // Integer form: a whole number of basis points.
+  if (/^\d+$/.test(trimmed)) return BigInt(trimmed);
+  // Decimal fraction form (back-compat): "0.1" === 1000 bps. bps = fraction * 1e4.
+  const m = /^(\d*)\.(\d+)$/.exec(trimmed);
+  if (!m) throw new NexusError("INVALID_CONFIG", `unparseable rake "${s}"`);
+  const whole = m[1] ?? "";
+  const frac = m[2] ?? "";
+  if (frac.length > 4) {
+    throw new NexusError(
+      "INVALID_CONFIG",
+      `rake "${s}" has finer than 1bp precision — express it as integer basis points`,
+    );
+  }
+  // Scale the decimal to 4 fractional digits, then interpret as bps.
+  const fracPadded = `${frac}0000`.slice(0, 4);
+  return BigInt(whole || "0") * BPS_DENOMINATOR + BigInt(fracPadded || "0");
+}
+
+/**
+ * @deprecated Use {@link rakeBps}. Kept for back-compat; returns the rake as a
+ * float fraction derived from the exact bps (safe to display, never used in
+ * money math).
+ */
 export function rakeFraction(economy: EconomyConfig | undefined): number {
-  const r = economy?.pot ? Number(economy.pot.rake) : 0;
-  if (!(r >= 0 && r < 1)) throw new NexusError("INVALID_CONFIG", `bad rake fraction ${r}`);
-  return r;
+  return Number(rakeBps(economy)) / Number(BPS_DENOMINATOR);
 }
 
 export interface PayoutSplit {
@@ -33,13 +79,12 @@ export interface PayoutSplit {
   rake: string;
 }
 
-/** Winner gets pot minus rake; payout + rake == pot exactly. */
+/** Winner gets pot minus rake; payout + rake == pot exactly. Pure bigint (M5). */
 export function computePayout(potHuman: string, economy: EconomyConfig | undefined): PayoutSplit {
   const pot = toMicro(potHuman);
-  const r = rakeFraction(economy);
-  // rake = floor(pot * r) using integer math at 1e6 resolution of r.
-  const rNum = BigInt(Math.round(r * 1_000_000));
-  const rake = (pot * rNum) / 1_000_000n;
+  const bps = rakeBps(economy);
+  // rake = floor(pot * bps / 10000) — all integer math, no float ever touches a ratio.
+  const rake = (pot * bps) / BPS_DENOMINATOR;
   const winner = pot - rake;
   return { winner: fromMicro(winner), rake: fromMicro(rake) };
 }

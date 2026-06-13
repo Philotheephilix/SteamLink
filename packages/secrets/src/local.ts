@@ -61,12 +61,14 @@ export const defaultConditionPredicate: ConditionPredicate = (conditions, auth) 
     // owner check: returns ":userAddress" means "must equal the caller".
     if (c.returns.value === ":userAddress") {
       const owner = state[c.method];
-      // If state names an owner, it must match the caller; otherwise allow the
-      // caller to claim ownership (single-party local dev).
+      // Fail CLOSED: an owner check can only pass when state names a concrete
+      // owner that matches the caller. If the owner is unknown/unresolvable
+      // (no state[method] string), DENY rather than letting the caller claim
+      // ownership — an absent owner must never grant access.
       if (typeof owner === "string") {
         return owner.toLowerCase() === auth.caller.toLowerCase();
       }
-      return true;
+      return false;
     }
     // boolean game-state view: state[method] must satisfy the comparator.
     if (c.returns.value === "true" || c.returns.value === "false") {
@@ -80,6 +82,15 @@ export const defaultConditionPredicate: ConditionPredicate = (conditions, auth) 
     return compare(Number(actual), c.returns.comparator, Number(c.returns.value));
   });
 };
+
+/**
+ * A cryptographically-random 256-bit nonce for an attestation. Unlike a
+ * per-process counter (which restarts at 0 and enables replay), this can't be
+ * reissued across restarts and won't collide in practice.
+ */
+function randomNonce(): bigint {
+  return BigInt(`0x${randomBytes(32).toString("hex")}`);
+}
 
 function compare(a: number, op: string, b: number): boolean {
   switch (op) {
@@ -123,7 +134,6 @@ export class LocalSecrets implements SecretsAdapter {
   private readonly account: ReturnType<typeof privateKeyToAccount>;
   private readonly validitySeconds: number;
   private readonly masterKey: Buffer;
-  private nonceCounter = 0n;
 
   constructor(opts: LocalSecretsOptions = {}) {
     this.predicate = opts.predicate ?? defaultConditionPredicate;
@@ -213,7 +223,11 @@ export class LocalSecrets implements SecretsAdapter {
       player: claim.player,
       system: claim.system,
       playedCard: claim.playedCard,
-      nonce: this.nonceCounter++,
+      // Random 256-bit nonce. A per-process counter resets to 0 on restart,
+      // letting an attacker replay an old (player, system, playedCard, nonce)
+      // attestation. A fresh CSPRNG nonce per attestation can't be reissued
+      // across restarts and won't collide in practice.
+      nonce: randomNonce(),
       validUntil: BigInt(Math.floor(Date.now() / 1000) + this.validitySeconds),
     };
     const payload = encodeAttestationPayload(fields);

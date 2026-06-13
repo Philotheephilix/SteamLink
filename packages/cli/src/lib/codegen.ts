@@ -7,6 +7,7 @@ import {
   type DeployManifest,
   type GameDefinition,
   generateSolidityTables,
+  solidityLibraryName,
 } from "@nexus/core";
 
 export interface CodegenResult {
@@ -30,9 +31,13 @@ export function runCodegen(game: GameDefinition, outDir: string): CodegenResult 
   const tablesSol = generateSolidityTables(manifest);
 
   mkdirSync(outDir, { recursive: true });
-  const pascal = manifest.name.charAt(0).toUpperCase() + manifest.name.slice(1);
+  // Use the same normalized identifier the Solidity generator emits as the
+  // library name, so the file name and the `library X {` inside it always agree
+  // (e.g. `my-game` → `MyGameTables.sol` containing `library MyGameTables`).
+  // Throws a clear error for names that can't form a valid identifier.
+  const lib = solidityLibraryName(manifest.name);
   const manifestPath = resolve(outDir, "manifest.json");
-  const tablesPath = resolve(outDir, `${pascal}Tables.sol`);
+  const tablesPath = resolve(outDir, `${lib}.sol`);
 
   writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
   writeFileSync(tablesPath, tablesSol);

@@ -85,7 +85,16 @@ export class PotService {
     const usdc = caps.tokens.USDC;
     if (!usdc) throw new NexusError("CAPABILITIES_UNAVAILABLE", "USDC token unavailable");
 
-    const bundle = this.buildTransferBundle(pot, usdc, winner, split.winner, caps.targetAddress);
+    const bundle = this.buildTransferBundle(
+      pot,
+      usdc,
+      winner,
+      split.winner,
+      caps.targetAddress,
+      // H4: deterministic per (pot, recipient, round=settle) — a retried settle
+      // cannot double-pay the winner.
+      `pot:${roomId}:settle:${winner.toLowerCase()}`,
+    );
     const handle = await this.deps.relayer.submitBundle(bundle);
     return { winner, amount: split.winner, rake: split.rake, bundleId: handle.bundleId };
   }
@@ -107,6 +116,9 @@ export class PotService {
         asAddress(share.player),
         share.amount,
         caps.targetAddress,
+        // H4: deterministic per (pot, recipient, round=refund) — a retried refund
+        // submit cannot double-refund a participant.
+        `pot:${roomId}:refund:${share.player.toLowerCase()}`,
       );
       const handle = await this.deps.relayer.submitBundle(bundle);
       refunds.push({
@@ -124,6 +136,7 @@ export class PotService {
     to: Address,
     amount: string,
     targetAddress: Address,
+    idempotencyKey: string,
   ): Bundle {
     const data = encodeFunctionData({
       abi: ERC20_TRANSFER_ABI,
@@ -138,6 +151,10 @@ export class PotService {
     return {
       delegationContext,
       encodedTxns: [{ to: usdc, data: data as Hex, value: 0n }],
+      // H4: this is a MONEY bundle — the relayer must determine + assert the
+      // target (hard reject if it can't), and dedupe by the idempotency key.
+      requireTarget: true,
+      idempotencyKey,
     };
   }
 }

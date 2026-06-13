@@ -1,3 +1,4 @@
+import { resourceId } from "@nexus/core";
 import { NexusError } from "@nexus/types";
 import { describe, expect, it } from "vitest";
 import {
@@ -63,6 +64,36 @@ describe("caveat sanity", () => {
     } catch (e) {
       expect((e as NexusError).code).toBe("TARGET_MISMATCH");
     }
+  });
+
+  it("accepts allowedSystems that are real game system ids (M1)", () => {
+    const d = saneDelegation();
+    d.caveats.gameplay.allowedSystems = [
+      resourceId("uno", "system", "Play"),
+      resourceId("uno", "system", "Draw"),
+    ];
+    expect(() => validateCaveats(d, uno, policy)).not.toThrow();
+  });
+
+  it("rejects an allowedSystems id that is NOT a system of the game (M1)", () => {
+    const d = saneDelegation();
+    // A well-formed bytes32 that is not any of uno's system ids.
+    d.caveats.gameplay.allowedSystems = [`0x${"ab".repeat(32)}` as `0x${string}`];
+    try {
+      validateCaveats(d, uno, policy);
+      throw new Error("should have thrown");
+    } catch (e) {
+      expect((e as NexusError).code).toBe("CAVEATS_INVALID");
+      expect((e as NexusError).message).toMatch(/unknown system id/i);
+    }
+  });
+
+  it("rejects a count-bypass: right number of ids but a forged one (M1)", () => {
+    const d = saneDelegation();
+    // Same length as before (1) but the id is arbitrary — the old count check
+    // would have passed this; membership rejects it.
+    d.caveats.gameplay.allowedSystems = [`0x${"cd".repeat(32)}` as `0x${string}`];
+    expect(() => validateCaveats(d, uno, policy)).toThrow(/unknown system id/i);
   });
 });
 

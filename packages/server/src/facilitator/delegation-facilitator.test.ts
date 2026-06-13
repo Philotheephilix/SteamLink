@@ -44,17 +44,33 @@ function transferLog(from: Hex, to: Hex, value: bigint) {
 /**
  * A FAKE viem public client — dependency injection, not a mock of verify logic.
  * It returns a known receipt; the real `verifyTransferOnChain` decoding +
- * assertion logic runs against it unchanged.
+ * assertion logic runs against it unchanged. By default the chain head sits 10
+ * blocks ahead of the receipt (so the H2 finality depth check passes) and blocks
+ * carry a timestamp AFTER the challenge issuance (so the H2 issuance binding
+ * passes). Tests override `head`/`blockTimestampMs` to exercise H2.
  */
-function fakeClient(receipt: TransactionReceiptLike): ReceiptReaderClient {
-  return { getTransactionReceipt: vi.fn(async () => receipt) };
+function fakeClient(
+  receipt: TransactionReceiptLike,
+  opts: { head?: bigint; blockTimestampMs?: number } = {},
+): ReceiptReaderClient {
+  const head = opts.head ?? receipt.blockNumber + 10n;
+  const tsMs = opts.blockTimestampMs ?? Date.now() + 60 * 60 * 1000;
+  return {
+    getTransactionReceipt: vi.fn(async () => receipt),
+    getBlockNumber: vi.fn(async () => head),
+    getBlock: vi.fn(async () => ({ timestamp: BigInt(Math.floor(tsMs / 1000)) })),
+  };
 }
 
 /** price for 5 USDC (6 decimals). */
 const PRICE_5 = 5_000_000n;
 
-function freshFacilitator(client: ReceiptReaderClient) {
-  return new DelegationFacilitator({ capabilities: CAPS, publicClient: client });
+function freshFacilitator(client: ReceiptReaderClient, minConfirmations?: number) {
+  return new DelegationFacilitator({
+    capabilities: CAPS,
+    publicClient: client,
+    ...(minConfirmations !== undefined ? { minConfirmations } : {}),
+  });
 }
 
 describe("DelegationFacilitator.challenge", () => {
@@ -234,5 +250,134 @@ describe("DelegationFacilitator.verify", () => {
         txHash: TXHASH,
       }),
     ).rejects.toBeInstanceOf(NexusError);
+  });
+});
+
+describe("DelegationFacilitator nonce rollback policy (H1)", () => {
+  const good: TransactionReceiptLike = {
+    status: "success",
+    blockNumber: 100n,
+    logs: [transferLog(PAYER, RECIPIENT, PRICE_5)],
+  };
+
+  it("does NOT roll back the nonce on a definitive SETTLEMENT_FAILED (no matching transfer)", async () => {
+    const noMatch: TransactionReceiptLike = {
+      status: "success",
+      blockNumber: 100n,
+      logs: [transferLog(PAYER, RECIPIENT, 1n)], // wrong amount → definitive failure
+    };
+    const fac = freshFacilitator(fakeClient(noMatch));
+    const ch = await fac.challenge({
+      amount: "5",
+      token: "USDC",
+      recipient: RECIPIENT,
+      payer: PAYER,
+    });
+    const redemption = {
+      nonce: ch.nonce,
+      payer: PAYER,
+      delegationContext: "0xdead" as Hex,
+      txHash: TXHASH,
+    };
+    await expect(fac.verify(redemption)).rejects.toMatchObject({ code: "SETTLEMENT_FAILED" });
+
+    // The nonce stays CONSUMED — a second attempt (even with a now-valid txHash)
+    // cannot grind the oracle; it is rejected as a replay, not re-verified.
+    await expect(
+      fac.verify({ ...redemption, txHash: `0x${"cd".repeat(32)}` as Hex }),
+    ).rejects.toMatchObject({ code: "NONCE_REUSED" });
+  });
+
+  it("DOES roll back the nonce on a RETRYABLE failure (receipt not found), allowing a retry", async () => {
+    let calls = 0;
+    const flaky: ReceiptReaderClient = {
+      getTransactionReceipt: vi.fn(async () => {
+        calls++;
+        if (calls === 1) throw new Error("receipt not found (transient)");
+        return good;
+      }),
+      getBlockNumber: vi.fn(async () => 200n),
+      getBlock: vi.fn(async () => ({
+        timestamp: BigInt(Math.floor((Date.now() + 3_600_000) / 1000)),
+      })),
+    };
+    const fac = freshFacilitator(flaky);
+    const ch = await fac.challenge({
+      amount: "5",
+      token: "USDC",
+      recipient: RECIPIENT,
+      payer: PAYER,
+    });
+    const redemption = {
+      nonce: ch.nonce,
+      payer: PAYER,
+      delegationContext: "0xdead" as Hex,
+      txHash: TXHASH,
+    };
+    // First attempt: transient receipt-read failure (retryable) → nonce rolled back.
+    await expect(fac.verify(redemption)).rejects.toMatchObject({ retryable: true });
+    // Retry succeeds because the nonce was not burned.
+    await expect(fac.verify(redemption)).resolves.toMatchObject({ status: "settled" });
+  });
+});
+
+describe("DelegationFacilitator finality + issuance binding (H2)", () => {
+  it("rejects a tx that is not yet buried under the required confirmations", async () => {
+    const receipt: TransactionReceiptLike = {
+      status: "success",
+      blockNumber: 100n,
+      logs: [transferLog(PAYER, RECIPIENT, PRICE_5)],
+    };
+    // head == mined block → depth 1; require 3 → too recent.
+    const client = fakeClient(receipt, { head: 100n });
+    const fac = freshFacilitator(client, 3);
+    const ch = await fac.challenge({
+      amount: "5",
+      token: "USDC",
+      recipient: RECIPIENT,
+      payer: PAYER,
+    });
+    await expect(
+      fac.verify({ nonce: ch.nonce, payer: PAYER, delegationContext: "0x" as Hex, txHash: TXHASH }),
+    ).rejects.toMatchObject({ code: "SETTLEMENT_FAILED", retryable: true });
+  });
+
+  it("rejects a tx mined BEFORE the challenge was issued (stale matching transfer)", async () => {
+    const receipt: TransactionReceiptLike = {
+      status: "success",
+      blockNumber: 100n,
+      logs: [transferLog(PAYER, RECIPIENT, PRICE_5)],
+    };
+    // Block timestamp is one hour in the PAST — predates the fresh challenge.
+    const client = fakeClient(receipt, { head: 200n, blockTimestampMs: Date.now() - 3_600_000 });
+    const fac = freshFacilitator(client, 1);
+    const ch = await fac.challenge({
+      amount: "5",
+      token: "USDC",
+      recipient: RECIPIENT,
+      payer: PAYER,
+    });
+    await expect(
+      fac.verify({ nonce: ch.nonce, payer: PAYER, delegationContext: "0x" as Hex, txHash: TXHASH }),
+    ).rejects.toMatchObject({ code: "SETTLEMENT_FAILED" });
+  });
+
+  it("accepts a final, post-issuance tx", async () => {
+    const receipt: TransactionReceiptLike = {
+      status: "success",
+      blockNumber: 100n,
+      logs: [transferLog(PAYER, RECIPIENT, PRICE_5)],
+    };
+    const client = fakeClient(receipt, { head: 110n, blockTimestampMs: Date.now() + 1000 });
+    const fac = freshFacilitator(client, 3);
+    const ch = await fac.challenge({
+      amount: "5",
+      token: "USDC",
+      recipient: RECIPIENT,
+      payer: PAYER,
+    });
+    await expect(
+      fac.verify({ nonce: ch.nonce, payer: PAYER, delegationContext: "0x" as Hex, txHash: TXHASH }),
+    ).resolves.toMatchObject({ status: "settled" });
   });
 });

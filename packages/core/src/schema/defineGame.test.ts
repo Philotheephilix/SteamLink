@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildManifest, resourceId } from "../codegen/manifest.js";
-import { generateSolidityTables } from "../codegen/solidity.js";
+import { generateSolidityTables, solidityLibraryName } from "../codegen/solidity.js";
 import { defineGame } from "./defineGame.js";
 import { t } from "./types.js";
 
@@ -78,5 +78,16 @@ describe("solidity codegen", () => {
     expect(sol).toContain("address id;");
     expect(sol).toContain("int8 direction;");
     expect(sol).toContain("pragma solidity ^0.8.23;");
+  });
+
+  it("normalizes hyphen/underscore game names into a valid Solidity library (M7)", () => {
+    expect(solidityLibraryName("uno")).toBe("UnoTables");
+    expect(solidityLibraryName("my-game")).toBe("MyGameTables");
+    expect(solidityLibraryName("my-cool_game")).toBe("MyCoolGameTables");
+    for (const n of ["my-game", "my_game", "my game", "a-b-c"]) {
+      expect(solidityLibraryName(n)).toMatch(/^[A-Za-z_]\w*$/);
+    }
+    // A name with no alphanumeric content can't form an identifier -> throw.
+    expect(() => solidityLibraryName("---")).toThrow(/valid identifier/);
   });
 });

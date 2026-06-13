@@ -1,5 +1,34 @@
 import type { DeployManifest } from "./manifest.js";
 
+const SOLIDITY_IDENT = /^[A-Za-z_]\w*$/;
+
+/**
+ * Derive a valid Solidity library identifier from a game name. The raw name may
+ * contain hyphens, spaces, or other punctuation (e.g. `my-game`), which would
+ * yield an invalid identifier if naively capitalized (`My-gameTables`). We split
+ * on any non-alphanumeric run, PascalCase each segment, join them, and append
+ * `Tables` (e.g. `my-game` → `MyGameTables`). The result is validated against
+ * `/^[A-Za-z_]\w*$/`; an empty or all-punctuation name throws a clear error.
+ *
+ * Shared by @nexus/core's generator and the CLI's file naming so both agree.
+ */
+export function solidityLibraryName(name: string): string {
+  const pascal = name
+    .split(/[^A-Za-z0-9]+/)
+    .filter(Boolean)
+    .map((seg) => seg.charAt(0).toUpperCase() + seg.slice(1))
+    .join("");
+  const lib = `${pascal}Tables`;
+  if (!pascal || !SOLIDITY_IDENT.test(lib)) {
+    throw new Error(
+      `Cannot derive a valid Solidity library name from game name ${JSON.stringify(
+        name,
+      )}: produced ${JSON.stringify(lib)}, which is not a valid identifier (/^[A-Za-z_]\\w*$/). Use a name with at least one alphanumeric character.`,
+    );
+  }
+  return lib;
+}
+
 /**
  * Generate a Solidity tables library for a game from its manifest. The library
  * exposes each table's id constant and a typed struct mirroring the schema, so
@@ -9,8 +38,7 @@ import type { DeployManifest } from "./manifest.js";
  * to the game's src/ and compiled by Foundry alongside hand-written systems.
  */
 export function generateSolidityTables(manifest: DeployManifest): string {
-  const pascal = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
-  const lib = `${pascal(manifest.name)}Tables`;
+  const lib = solidityLibraryName(manifest.name);
 
   const structs = manifest.tables
     .map((tbl) => {

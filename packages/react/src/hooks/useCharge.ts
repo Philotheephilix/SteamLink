@@ -18,10 +18,20 @@ function nextBundleId(): string {
   return `charge-${Date.now().toString(36)}-${chargeCounter}`;
 }
 
+/** Default terminal-status timeout for a charge bundle (ms). */
+export const DEFAULT_CHARGE_TIMEOUT_MS = 60_000;
+
 export interface ChargeRequest {
   amount: string;
   to: Address;
   reason?: string;
+  /**
+   * Max time (ms) to await a terminal status before the charge is auto-failed:
+   * the optimistic spend decrement is rolled back and the promise rejects, so a
+   * lost/never-acked submit can't leave budget stuck or a promise hanging.
+   * Default {@link DEFAULT_CHARGE_TIMEOUT_MS} (60s).
+   */
+  timeoutMs?: number;
 }
 
 export interface ChargeResult {
@@ -93,10 +103,18 @@ export function useCharge(): UseChargeResult {
         );
         const calldata = buildRedeemCalldata(encodePermissionContext(signed), execution);
 
+        const timeoutMs = req.timeoutMs ?? DEFAULT_CHARGE_TIMEOUT_MS;
         const result = await new Promise<ChargeResult>((resolve, reject) => {
+          let timer: ReturnType<typeof setTimeout> | undefined;
           const resolver: PendingResolver = {
-            resolve: (evt) => resolve({ bundleId, calldata, txHash: evt.txHash }),
-            reject,
+            resolve: (evt) => {
+              if (timer) clearTimeout(timer);
+              resolve({ bundleId, calldata, txHash: evt.txHash });
+            },
+            reject: (err) => {
+              if (timer) clearTimeout(timer);
+              reject(err);
+            },
           };
           manager.trackPending(bundleId, resolver);
           const transport = config.transport;
@@ -109,6 +127,29 @@ export function useCharge(): UseChargeResult {
                 reason: e instanceof Error ? e.message : "submit failed",
               });
             });
+          } else {
+            // No transport.submit: nothing will ever ack this bundle. Fail it
+            // immediately so the optimistic decrement is rolled back (catch
+            // restores prevSpent) and the promise rejects instead of hanging.
+            manager.applyStatus({
+              bundleId,
+              status: "failed",
+              code: "RELAYER_FAILED",
+              reason: "transport has no submit(): cannot send charge",
+            });
+            return;
+          }
+
+          // Safety net: a never-acked charge is auto-failed after timeoutMs.
+          if (timeoutMs > 0 && Number.isFinite(timeoutMs)) {
+            timer = setTimeout(() => {
+              manager.applyStatus({
+                bundleId,
+                status: "failed",
+                code: "RELAYER_FAILED",
+                reason: `charge timed out after ${timeoutMs}ms with no terminal status`,
+              });
+            }, timeoutMs);
           }
         });
         return result;

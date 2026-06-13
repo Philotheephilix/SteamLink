@@ -6,6 +6,8 @@ import {
   type RawLog,
   STORE_SET_RECORD,
   allIndexerSchemas,
+  buildTableRegistry,
+  decodeStoreLog,
   toIndexerSchema,
 } from "../src/index.js";
 import { PLAYER, TURN_ORDER_TABLE_ID, uno } from "./fixtures.js";
@@ -103,5 +105,63 @@ describe("InMemoryIndexer", () => {
     const log = turnOrderLog(7n, PLAYER, 1, 100, 2);
     log.topics = [log.topics[0] as Hex, `0x${"11".repeat(32)}` as Hex];
     expect(ix.ingestLog(log)).toBeNull();
+  });
+});
+
+describe("decodeStoreLog strictness (H5)", () => {
+  const registry = buildTableRegistry(allIndexerSchemas(new Map([["uno", uno]])));
+
+  /** Build a Store_SetRecord log with explicit key/static/dynamic blobs. */
+  function rawSet(tableId: Hex, keyTuple: Hex[], staticData: Hex, dynamicData: Hex = "0x"): RawLog {
+    const topics = encodeEventTopics({
+      abi: [STORE_SET_RECORD],
+      eventName: "Store_SetRecord",
+      args: { tableId },
+    });
+    const data = encodeAbiParameters(
+      [
+        { name: "keyTuple", type: "bytes32[]" },
+        { name: "staticData", type: "bytes" },
+        { name: "dynamicData", type: "bytes" },
+      ],
+      [keyTuple, staticData, dynamicData],
+    );
+    return { topics: topics as Hex[], data, blockNumber: 1, logIndex: 0 };
+  }
+
+  const goodStatic = encodeAbiParameters(
+    [
+      { name: "current", type: "address" },
+      { name: "direction", type: "uint8" },
+    ],
+    [PLAYER, 1],
+  ) as Hex;
+
+  it("decodes a well-formed TurnOrder record", () => {
+    const log = rawSet(TURN_ORDER_TABLE_ID, [pad(toHex(7n), { size: 32 })], goodStatic);
+    const change = decodeStoreLog(log, registry);
+    expect(change?.type).toBe("set");
+  });
+
+  it("rejects (null) a keyTuple whose length != the key field count", () => {
+    // TurnOrder has ONE key field (roomId). Two key words is a forged encoding.
+    const log = rawSet(
+      TURN_ORDER_TABLE_ID,
+      [pad(toHex(7n), { size: 32 }), pad(toHex(8n), { size: 32 })],
+      goodStatic,
+    );
+    expect(decodeStoreLog(log, registry)).toBeNull();
+  });
+
+  it("rejects (null) an empty keyTuple instead of zero-filling the key", () => {
+    const log = rawSet(TURN_ORDER_TABLE_ID, [], goodStatic);
+    expect(decodeStoreLog(log, registry)).toBeNull();
+  });
+
+  it("rejects (null) staticData whose length doesn't match the schema", () => {
+    // Two static fields → 64 bytes expected; supply only 32.
+    const shortStatic = `0x${"00".repeat(32)}` as Hex;
+    const log = rawSet(TURN_ORDER_TABLE_ID, [pad(toHex(7n), { size: 32 })], shortStatic);
+    expect(decodeStoreLog(log, registry)).toBeNull();
   });
 });

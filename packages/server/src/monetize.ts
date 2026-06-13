@@ -120,14 +120,25 @@ export function statusForError(err: NexusError): number {
     case "BUDGET_EXCEEDED":
     case "DELEGATION_EXPIRED":
       return 403;
+    // Genuinely-unpaid / replay / unconfirmed settlement → the client must (re)pay.
     case "PAYMENT_REQUIRED":
     case "NONCE_REUSED":
     case "SETTLEMENT_FAILED":
       return 402;
+    // Caller mismatch / origin failure: the redemption is not authorized for this
+    // payer — not a "pay again" condition, it's a forbidden request.
+    case "NOT_CONNECTED":
+    case "WEBHOOK_UNVERIFIED":
+      return 403;
+    // Server/config faults must NOT masquerade as 402 (M4).
     case "INVALID_CONFIG":
+    case "CAPABILITIES_UNAVAILABLE":
+    case "RELAYER_FAILED":
+    case "INTERNAL":
       return 500;
     default:
-      return 402;
+      // Unknown/unmapped codes are server faults, not unpaid requests (M4).
+      return 500;
   }
 }
 
@@ -151,6 +162,10 @@ export async function createMonetizeHandler(
   const facilitator = resolveFacilitator(opts, runtime);
 
   return async (req: MonetizeRequest): Promise<MonetizeResult> => {
+    // Resolve the AUTHENTICATED payer (auth layer → req.payer, or the x-payer
+    // header the gateway sets). This is the identity the redemption is bound to.
+    const authPayer = req.payer ?? (req.header(PAYER_HEADER) as Hex | undefined);
+
     let redemption: Redemption | undefined;
     try {
       redemption = extractRedemption(req);
@@ -159,7 +174,7 @@ export async function createMonetizeHandler(
       return { kind: "reject", status: statusForError(e), body: e.toJSON(), error: e };
     }
 
-    // No redemption → issue the 402 challenge.
+    // No redemption → issue the 402 challenge, binding the nonce to the payer.
     if (!redemption) {
       const paymentReq: PaymentRequest = {
         amount: opts.price,
@@ -169,15 +184,46 @@ export async function createMonetizeHandler(
         // Payer comes from the auth layer (header or resolved context). The
         // challenge binds its nonce to this payer; verify() asserts the on-chain
         // Transfer originates from it.
-        payer: req.payer ?? (req.header(PAYER_HEADER) as Hex | undefined) ?? ZERO_PAYER,
+        payer: authPayer ?? ZERO_PAYER,
       };
       const body = await facilitator.challenge(paymentReq);
       return { kind: "challenge", status: 402, body };
     }
 
+    // ── C4: a redemption is NOT a bearer token ──
+    // Require an authenticated payer and bind the redemption to it BEFORE we
+    // accept any settlement. Without this, anyone replaying a redemption blob
+    // (or a settlement for a different payer) could unlock the paywalled route.
+    if (!authPayer || authPayer.toLowerCase() === ZERO_PAYER.toLowerCase()) {
+      const e = new NexusError(
+        "NOT_CONNECTED",
+        "monetize: an authenticated payer is required to redeem a payment",
+      );
+      return { kind: "reject", status: statusForError(e), body: e.toJSON(), error: e };
+    }
+    if (redemption.payer && redemption.payer.toLowerCase() !== authPayer.toLowerCase()) {
+      const e = new NexusError(
+        "NOT_CONNECTED",
+        "monetize: redemption.payer does not match the authenticated caller",
+      );
+      return { kind: "reject", status: statusForError(e), body: e.toJSON(), error: e };
+    }
+    // Force the verified caller onto the redemption so the facilitator binds the
+    // nonce to it (never trust a body-supplied payer).
+    const boundRedemption: Redemption = { ...redemption, payer: authPayer };
+
     // Redemption present → verify on Base and gate the route.
     try {
-      const settlement = await facilitator.verify(redemption);
+      const settlement = await facilitator.verify(boundRedemption);
+      // The on-chain `from` MUST be the authenticated caller — a settlement that
+      // moved funds from a DIFFERENT account cannot satisfy this caller's charge.
+      if (settlement.from.toLowerCase() !== authPayer.toLowerCase()) {
+        const e = new NexusError(
+          "SETTLEMENT_FAILED",
+          `settlement.from ${settlement.from} != authenticated payer ${authPayer}`,
+        );
+        return { kind: "reject", status: statusForError(e), body: e.toJSON(), error: e };
+      }
       return { kind: "pass", settlement };
     } catch (err) {
       const e =

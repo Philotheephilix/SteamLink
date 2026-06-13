@@ -1,3 +1,4 @@
+import { createHmac, timingSafeEqual } from "node:crypto";
 import { type Address, type Hex, NexusError, asAddress } from "@nexus/types";
 import type { PublicClient } from "viem";
 import type {
@@ -95,6 +96,8 @@ export class OneShotRelayer implements RelayerAdapter {
   private capsCache?: RelayerCapabilities;
   /** Terminal bundleIds already emitted, for webhook idempotency. */
   private readonly terminal = new Set<string>();
+  /** idempotencyKey -> bundleHandle, so a retried money submit cannot double-pay (H4). */
+  private readonly submittedByKey = new Map<string, BundleHandle>();
 
   constructor(private readonly cfg: OneShotRelayerConfig) {
     const f = cfg.fetchImpl ?? (globalThis.fetch as unknown as FetchImpl | undefined);
@@ -156,10 +159,26 @@ export class OneShotRelayer implements RelayerAdapter {
     if (bundle.encodedTxns.length === 0) {
       throw new NexusError("RELAYER_FAILED", "bundle has no transactions");
     }
+    // H4: idempotency — a retried money submit with the same key returns the
+    // original handle instead of paying again.
+    if (bundle.idempotencyKey) {
+      const prior = this.submittedByKey.get(bundle.idempotencyKey);
+      if (prior) return prior;
+    }
+
     // Resolve capabilities (cached) and run the target guard BEFORE any POST.
     const caps = await this.getCapabilities();
     const target = extractTarget(bundle);
-    if (target !== undefined && asAddress(target) !== asAddress(caps.targetAddress)) {
+    if (target === undefined) {
+      // H4: a money bundle whose target cannot be determined is a HARD REJECT —
+      // never submit with the guard silently skipped.
+      if (bundle.requireTarget) {
+        throw new NexusError(
+          "TARGET_MISMATCH",
+          "money bundle delegation target could not be determined — refusing to submit unguarded",
+        );
+      }
+    } else if (asAddress(target) !== asAddress(caps.targetAddress)) {
       throw new NexusError(
         "TARGET_MISMATCH",
         `delegation target ${target} != relayer targetAddress ${caps.targetAddress}`,
@@ -205,6 +224,9 @@ export class OneShotRelayer implements RelayerAdapter {
     const handle: BundleHandle = { bundleId };
     if (typeof json.txHash === "string") handle.txHash = json.txHash as Hex;
 
+    // H4: record the handle under its idempotency key so retries dedupe.
+    if (bundle.idempotencyKey) this.submittedByKey.set(bundle.idempotencyKey, handle);
+
     // No webhook configured → drive status via the polling fallback.
     if (this.cfg.webhookUrl === undefined && destinationUrl === undefined) {
       void this.poll(bundleId);
@@ -219,12 +241,36 @@ export class OneShotRelayer implements RelayerAdapter {
 
   /**
    * Ingest a 1Shot webhook delivery. The backend's `POST /nexus/webhook` calls
-   * this with the parsed body and the raw headers. It verifies origin/signature,
-   * then emits a StatusEvent — deduped so a redelivered terminal bundle never
-   * double-emits. Throws WEBHOOK_UNVERIFIED on a failed signature/origin check.
+   * this with the RAW request body (the exact bytes 1Shot signed) and the raw
+   * headers. The HMAC is computed over the raw body — so `status`, `txHash` and
+   * `revert` are all covered by the signature — then the body is parsed and a
+   * StatusEvent emitted, deduped so a redelivered terminal bundle never
+   * double-emits. Throws WEBHOOK_UNVERIFIED on a failed signature/origin check
+   * or a malformed/mismatched body.
+   *
+   * `rawBody` is the canonical signed artifact. A parsed-object overload is kept
+   * for the polling fallback / tests, but raw-body ingestion is the secure path.
    */
-  ingestWebhook(payload: OneShotWebhookPayload, headers: WebhookHeaders = {}): StatusEvent | null {
-    this.verifyWebhook(payload, headers);
+  ingestWebhook(
+    rawBodyOrPayload: string | OneShotWebhookPayload,
+    headers: WebhookHeaders = {},
+  ): StatusEvent | null {
+    let rawBody: string;
+    let payload: OneShotWebhookPayload;
+    if (typeof rawBodyOrPayload === "string") {
+      rawBody = rawBodyOrPayload;
+      this.verifyWebhook(rawBody, headers);
+      try {
+        payload = JSON.parse(rawBody) as OneShotWebhookPayload;
+      } catch {
+        throw new NexusError("WEBHOOK_UNVERIFIED", "webhook body is not valid JSON");
+      }
+    } else {
+      // Object overload: serialize deterministically and verify the SAME bytes.
+      payload = rawBodyOrPayload;
+      rawBody = JSON.stringify(payload);
+      this.verifyWebhook(rawBody, headers);
+    }
     if (!payload.bundleId || !STATUS_VALUES.has(payload.status)) {
       throw new NexusError("WEBHOOK_UNVERIFIED", "webhook payload malformed");
     }
@@ -245,18 +291,19 @@ export class OneShotRelayer implements RelayerAdapter {
   }
 
   /**
-   * Verify the webhook signature header against the configured secret and the
-   * request origin. Fails closed: any missing/mismatched signature throws
-   * WEBHOOK_UNVERIFIED before any StatusEvent is emitted.
+   * Verify the webhook signature header against the configured secret over the
+   * RAW request body (so status/txHash/revert are all signed). Fails closed: a
+   * missing or mismatched signature throws WEBHOOK_UNVERIFIED before any
+   * StatusEvent is emitted. The comparison is constant-time (`timingSafeEqual`).
    */
-  private verifyWebhook(payload: OneShotWebhookPayload, headers: WebhookHeaders): void {
+  private verifyWebhook(rawBody: string, headers: WebhookHeaders): void {
     const sig = headers["x-1shot-signature"] ?? headers["X-1Shot-Signature"];
     // The signing secret is the API secret; absence means we cannot trust the call.
-    if (sig === undefined) {
+    if (sig === undefined || sig === "") {
       throw new NexusError("WEBHOOK_UNVERIFIED", "missing webhook signature header");
     }
-    const expected = signWebhook(this.cfg.apiSecret, payload.bundleId);
-    if (sig !== expected) {
+    const expected = signWebhook(this.cfg.apiSecret, rawBody);
+    if (!constantTimeEqualHex(sig, expected)) {
       throw new NexusError("WEBHOOK_UNVERIFIED", "webhook signature mismatch");
     }
   }
@@ -396,20 +443,36 @@ function extractTarget(bundle: Bundle): string | undefined {
 }
 
 /**
- * Compute the webhook signature for a (secret, bundleId) pair. Exported so the
- * backend can sign test deliveries and tests can assert verification — the real
- * 1Shot HMAC scheme is isolated here for a one-place swap.
+ * Compute the webhook signature: HMAC-SHA256 of the RAW request body keyed by the
+ * 1Shot API secret, hex-encoded with a `0x` prefix. Because the whole body is
+ * signed, every field (status, txHash, revert) is integrity-protected — mutating
+ * any byte invalidates the signature. Exported so the backend can sign test
+ * deliveries and tests can assert verification; the scheme is isolated here for a
+ * one-place swap.
  */
-export function signWebhook(secret: string, bundleId: string): string {
-  // Deterministic, secret-keyed signature over the bundleId. The real 1Shot
-  // scheme (HMAC over the raw body) is isolated here for a one-place swap.
-  let h = 2166136261 ^ secret.length;
-  const data = `${secret}:${bundleId}`;
-  for (let i = 0; i < data.length; i++) {
-    h ^= data.charCodeAt(i);
-    h = Math.imul(h, 16777619);
+export function signWebhook(secret: string, rawBody: string): string {
+  const mac = createHmac("sha256", secret).update(rawBody, "utf8").digest("hex");
+  return `0x${mac}`;
+}
+
+/**
+ * Constant-time comparison of two hex signature strings. Returns false (never
+ * throws) on any length/format mismatch so verification fails closed.
+ */
+function constantTimeEqualHex(a: string, b: string): boolean {
+  const an = a.startsWith("0x") ? a.slice(2) : a;
+  const bn = b.startsWith("0x") ? b.slice(2) : b;
+  if (an.length !== bn.length || an.length === 0) return false;
+  let ab: Buffer;
+  let bb: Buffer;
+  try {
+    ab = Buffer.from(an, "hex");
+    bb = Buffer.from(bn, "hex");
+  } catch {
+    return false;
   }
-  return `0x${(h >>> 0).toString(16).padStart(8, "0")}`;
+  if (ab.length !== bb.length || ab.length === 0) return false;
+  return timingSafeEqual(ab, bb);
 }
 
 function toBigInt(v: string | number): bigint {

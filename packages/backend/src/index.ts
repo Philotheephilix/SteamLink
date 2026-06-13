@@ -27,8 +27,22 @@ export {
   routeHealthz,
   routeReadyz,
 } from "./gateway/routes.js";
-export { verifyRequest, canonicalMessage } from "./gateway/auth.js";
-export type { SignedRequest, AuthConfig } from "./gateway/auth.js";
+export {
+  verifyRequest,
+  canonicalMessage,
+  TtlNonceReplayStore,
+  DEFAULT_NONCE_REPLAY_TTL_MS,
+} from "./gateway/auth.js";
+export type { SignedRequest, AuthConfig, NonceReplayStore } from "./gateway/auth.js";
+export {
+  createAuthMiddleware,
+  nonceStoreFromSessionStore,
+  SIG_HEADER,
+  NONCE_HEADER,
+  TIMESTAMP_HEADER,
+  CALLER_HEADER,
+} from "./gateway/auth-middleware.js";
+export type { AuthMiddlewareConfig } from "./gateway/auth-middleware.js";
 export { WsHub } from "./gateway/ws.js";
 export type { ClientFrame, ServerFrame, SocketSink } from "./gateway/ws.js";
 export { healthz, readyz } from "./gateway/health.js";
@@ -56,7 +70,7 @@ export type { RoomEvent } from "./rooms/lifecycle.js";
 // ── pots ──
 export { PotService } from "./pots/PotService.js";
 export type { PotServiceDeps } from "./pots/PotService.js";
-export { computePayout, computeRefunds, rakeFraction } from "./pots/rake.js";
+export { computePayout, computeRefunds, rakeFraction, rakeBps } from "./pots/rake.js";
 export type { PayoutSplit, RefundShare } from "./pots/rake.js";
 
 // ── lifecycles ──
@@ -69,11 +83,15 @@ export type { AwaitingResolution } from "./lifecycles/awaiting.js";
 export {
   WebhookHandler,
   MemoryWebhookLedger,
+  hmacWebhookVerifier,
+  signWebhookBody,
+  WEBHOOK_SIG_HEADER,
 } from "./lifecycles/webhook.js";
 export type {
   WebhookLedger,
   WebhookPayload,
   WebhookVerifier,
+  WebhookSettlementDeps,
   CorrelationRecord,
   IngestResult,
 } from "./lifecycles/webhook.js";

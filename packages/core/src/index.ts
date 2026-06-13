@@ -23,7 +23,7 @@ export type {
   ManifestSystem,
   ManifestField,
 } from "./codegen/manifest.js";
-export { generateSolidityTables } from "./codegen/solidity.js";
+export { generateSolidityTables, solidityLibraryName } from "./codegen/solidity.js";
 
 // ── delegation engine ──
 export {

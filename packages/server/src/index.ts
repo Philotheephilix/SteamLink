@@ -8,7 +8,10 @@ export type {
 } from "./ports/facilitator.js";
 
 // ── default delegation-aware facilitator ──
-export { DelegationFacilitator } from "./facilitator/delegation-facilitator.js";
+export {
+  DelegationFacilitator,
+  DEFAULT_MIN_CONFIRMATIONS,
+} from "./facilitator/delegation-facilitator.js";
 export type { DelegationFacilitatorConfig } from "./facilitator/delegation-facilitator.js";
 
 // ── settlement verification (real on-chain read; client injected for tests) ──

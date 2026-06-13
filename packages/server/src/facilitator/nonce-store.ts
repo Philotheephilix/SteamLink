@@ -12,6 +12,11 @@ export interface NonceRecord {
   price: string;
   recipient: Hex;
   expiresAt: number;
+  /**
+   * Epoch ms the nonce was issued. Binds settlement to challenge time (H2): a tx
+   * mined before this instant cannot satisfy the nonce. Defaulted by `issue()`.
+   */
+  issuedAt: number;
   used: boolean;
 }
 
@@ -21,8 +26,14 @@ export interface NonceRecord {
  * by satisfying this same interface (atomic `SET NX` / Lua CAS for `consume`).
  */
 export interface NonceStore {
-  /** Mint and persist a fresh nonce for a challenge. */
-  issue(input: Omit<NonceRecord, "nonce" | "used">): NonceRecord;
+  /**
+   * Mint and persist a fresh nonce for a challenge. `issuedAt` is optional and
+   * defaults to "now"; the store stamps it so `verify()` can bind a settlement
+   * to the challenge time (H2).
+   */
+  issue(
+    input: Omit<NonceRecord, "nonce" | "used" | "issuedAt"> & { issuedAt?: number },
+  ): NonceRecord;
   /** Look up an issued nonce, or undefined if never issued. */
   get(nonce: Hex): NonceRecord | undefined;
   /**
@@ -31,6 +42,13 @@ export interface NonceStore {
    * `NONCE_REUSED`/`SETTLEMENT_FAILED` if never issued.
    */
   consume(nonce: Hex, now?: number): NonceRecord;
+  /**
+   * Roll a consumed nonce back to unused — ONLY safe for RETRYABLE failures
+   * (transient receipt-read errors). It is a no-op if the nonce is unknown or
+   * already unused. Never call this on a definitive SETTLEMENT_FAILED, or the
+   * nonce becomes a grinding oracle (H1).
+   */
+  rollback(nonce: Hex): void;
 }
 
 /** Default challenge TTL: 5 minutes. */
@@ -46,14 +64,26 @@ export function randomNonce(): Hex {
 export class InMemoryNonceStore implements NonceStore {
   private readonly records = new Map<Hex, NonceRecord>();
 
-  issue(input: Omit<NonceRecord, "nonce" | "used">): NonceRecord {
-    const record: NonceRecord = { ...input, nonce: randomNonce(), used: false };
+  issue(
+    input: Omit<NonceRecord, "nonce" | "used" | "issuedAt"> & { issuedAt?: number },
+  ): NonceRecord {
+    const record: NonceRecord = {
+      ...input,
+      issuedAt: input.issuedAt ?? Date.now(),
+      nonce: randomNonce(),
+      used: false,
+    };
     this.records.set(record.nonce, record);
     return record;
   }
 
   get(nonce: Hex): NonceRecord | undefined {
     return this.records.get(nonce);
+  }
+
+  rollback(nonce: Hex): void {
+    const record = this.records.get(nonce);
+    if (record) record.used = false;
   }
 
   consume(nonce: Hex, now: number = Date.now()): NonceRecord {

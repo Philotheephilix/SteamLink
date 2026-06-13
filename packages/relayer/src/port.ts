@@ -31,6 +31,18 @@ export interface Bundle {
   eip7702Auth?: Hex;
   /** Where the relayer should POST terminal status (webhook). */
   destinationUrl?: string;
+  /**
+   * Marks a MONEY bundle (pot settle/refund, charge). When true, the relayer MUST
+   * be able to determine the delegation target and assert it equals
+   * `capabilities.targetAddress`; if the target cannot be determined the bundle is
+   * HARD-REJECTED rather than submitted with the guard skipped (H4).
+   */
+  requireTarget?: boolean;
+  /**
+   * Deterministic idempotency key (e.g. `pot:<room>:refund:<recipient>:<round>`).
+   * The relayer dedupes by this key so a retried submit cannot double-pay (H4).
+   */
+  idempotencyKey?: string;
 }
 
 export interface EncodedCall {

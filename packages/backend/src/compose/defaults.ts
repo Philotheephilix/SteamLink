@@ -1,6 +1,10 @@
 import type { RelayerAdapter, RelayerCapabilities } from "@nexus/relayer";
-import type { FacilitatorAdapter } from "@nexus/server";
-import type { Address } from "@nexus/types";
+import {
+  DelegationFacilitator,
+  type FacilitatorAdapter,
+  type ReceiptReaderClient,
+} from "@nexus/server";
+import { type Address, NexusError } from "@nexus/types";
 import { InMemoryIndexer } from "../indexer/memory-indexer.js";
 import { StubFacilitator } from "../ports/facilitator.js";
 import type { IndexerAdapter } from "../ports/indexer.js";
@@ -23,10 +27,39 @@ export function defaultSessionStore(): SessionStore {
   return new MemorySessionStore();
 }
 
+export interface DefaultFacilitatorOptions {
+  /** Receipt-reading client for the real on-chain-verifying facilitator (C6). */
+  publicClient?: ReceiptReaderClient;
+  /**
+   * Opt into the UNSAFE dev stub facilitator. Without this (the default) the
+   * money-safe path requires a real `publicClient` and builds a
+   * `DelegationFacilitator` that confirms settlements on-chain.
+   */
+  allowUnsafeDev?: boolean;
+}
+
+/**
+ * The default facilitator (C6). The money-safe default is the REAL
+ * `DelegationFacilitator` (on-chain settlement verification) — it requires a
+ * `publicClient`. The fabricating `StubFacilitator` is ONLY returned when the
+ * caller explicitly opts in via `allowUnsafeDev: true`. If neither a publicClient
+ * nor the unsafe flag is provided, construction throws (fail closed).
+ */
 export function defaultFacilitator(
   capabilities: RelayerCapabilities | (() => Promise<RelayerCapabilities>),
+  opts: DefaultFacilitatorOptions = {},
 ): FacilitatorAdapter {
-  return new StubFacilitator(capabilities);
+  if (opts.publicClient) {
+    return new DelegationFacilitator({ capabilities, publicClient: opts.publicClient });
+  }
+  if (opts.allowUnsafeDev) {
+    return new StubFacilitator(capabilities, { allowUnsafeDev: true });
+  }
+  throw new NexusError(
+    "INVALID_CONFIG",
+    "createBackend: the default facilitator needs a `publicClient` to verify settlements on-chain. " +
+      "Pass `publicClient`, supply an explicit `facilitator`, or set `allowUnsafeDevFacilitator: true` for dev only.",
+  );
 }
 
 /** A relayer is REQUIRED (no zero-config live relayer); the CLI supplies one. */

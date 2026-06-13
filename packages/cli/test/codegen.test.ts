@@ -70,4 +70,25 @@ describe("runCodegen", () => {
     const onDisk = JSON.parse(readFileSync(result.files.manifest, "utf8"));
     expect(onDisk).toEqual(result.manifest);
   });
+
+  it("normalizes a hyphenated/underscored game name into a valid Solidity library (M7)", () => {
+    const hyphenated = defineGame({
+      name: "my-cool_game",
+      tables: { Player: { id: t.address, roomId: t.uint } },
+      systems: { PlayCardSystem: "./systems/PlayCard.sol" },
+    });
+    const result = runCodegen(hyphenated, dir);
+
+    // File name and the `library X {` must agree and be a valid identifier
+    // (no hyphen/underscore-broken token like `My-cool_gameTables`).
+    const ident = "MyCoolGameTables";
+    expect(result.files.tablesSol).toMatch(new RegExp(`/${ident}\\.sol$`));
+    expect(ident).toMatch(/^[A-Za-z_]\w*$/);
+
+    const sol = readFileSync(result.files.tablesSol, "utf8");
+    expect(sol).toContain(`library ${ident} {`);
+    expect(sol).not.toMatch(/library\s+[^{]*[-]/); // no hyphen in the library name
+    expect(sol).toContain("struct PlayerRow {");
+    expect(sol).toContain("bytes32 internal constant PlayCardSystem_ID =");
+  });
 });

@@ -11,6 +11,13 @@ import type {
 import { DEFAULT_NONCE_TTL_MS, InMemoryNonceStore, type NonceStore } from "./nonce-store.js";
 import { type ReceiptReaderClient, verifyTransferOnChain } from "./verify.js";
 
+/**
+ * Default finality depth (H2). Base has fast, deep finality; 1 confirmation
+ * (the mining block itself) is the floor — raise via config for higher-value
+ * charges. Kept low enough to remain responsive on the hot path.
+ */
+export const DEFAULT_MIN_CONFIRMATIONS = 1;
+
 export interface DelegationFacilitatorConfig {
   /**
    * Relayer capabilities — the SOURCE OF TRUTH for the payment token address and
@@ -28,6 +35,12 @@ export interface DelegationFacilitatorConfig {
   nonceStore?: NonceStore;
   /** Challenge TTL in ms. Defaults to {@link DEFAULT_NONCE_TTL_MS}. */
   ttlMs?: number;
+  /**
+   * Minimum confirmation depth required before a settlement is accepted (H2).
+   * Defaults to {@link DEFAULT_MIN_CONFIRMATIONS}. When `> 0` the `publicClient`
+   * MUST expose `getBlockNumber`. Set `0` only where reorgs are not a concern.
+   */
+  minConfirmations?: number;
   /**
    * Optional allowlist check: does `recipient` belong to `payer`'s AllowedTargets
    * budget caveat? The on-chain `AllowedTargetsEnforcer` is authoritative; this
@@ -50,6 +63,7 @@ export interface DelegationFacilitatorConfig {
 export class DelegationFacilitator implements FacilitatorAdapter {
   private readonly nonceStore: NonceStore;
   private readonly ttlMs: number;
+  private readonly minConfirmations: number;
   private caps?: RelayerCapabilities;
   /** Idempotency: nonce -> settled result, so a re-delivered webhook is a no-op. */
   private readonly settled = new Map<Hex, Settlement>();
@@ -57,6 +71,7 @@ export class DelegationFacilitator implements FacilitatorAdapter {
   constructor(private readonly cfg: DelegationFacilitatorConfig) {
     this.nonceStore = cfg.nonceStore ?? new InMemoryNonceStore();
     this.ttlMs = cfg.ttlMs ?? DEFAULT_NONCE_TTL_MS;
+    this.minConfirmations = cfg.minConfirmations ?? DEFAULT_MIN_CONFIRMATIONS;
     if (typeof cfg.capabilities !== "function") this.caps = cfg.capabilities;
   }
 
@@ -115,14 +130,23 @@ export class DelegationFacilitator implements FacilitatorAdapter {
 
   /**
    * `verify()` per the port. Single-uses the nonce (replay protection), then
-   * confirms the USDC `Transfer` on Base via the injected client. Idempotent:
-   * a re-delivered webhook returns the cached Settlement without re-consuming.
+   * confirms the USDC `Transfer` on Base via the injected client, with a finality
+   * depth and an issuance binding (H2). Idempotent: a re-delivered webhook
+   * returns the cached Settlement without re-consuming.
+   *
+   * Nonce rollback (H1): a consumed nonce is rolled back ONLY on a RETRYABLE
+   * failure (transient receipt-read / not-yet-final). A DEFINITIVE
+   * SETTLEMENT_FAILED (reverted tx, no matching transfer, stale tx) keeps the
+   * nonce consumed — otherwise an attacker could grind the oracle, retrying
+   * different txHashes against one paid challenge.
    */
   async verify(redemption: Redemption): Promise<Settlement> {
     const cached = this.settled.get(redemption.nonce);
     if (cached) return cached;
 
     if (!redemption.txHash) {
+      // Pre-consume: no nonce burned, and this is inherently retryable (the tx
+      // may simply not be mined yet).
       throw new NexusError(
         "SETTLEMENT_FAILED",
         `redemption ${redemption.nonce} has no txHash to verify`,
@@ -135,7 +159,11 @@ export class DelegationFacilitator implements FacilitatorAdapter {
     const caps = await this.capabilities();
     const tokenAddr = caps.tokens.USDC;
     if (!tokenAddr) {
-      throw new NexusError("CAPABILITIES_UNAVAILABLE", "USDC token address unavailable");
+      // Infra failure, not a settlement decision — roll back so a retry works.
+      this.nonceStore.rollback(redemption.nonce);
+      throw new NexusError("CAPABILITIES_UNAVAILABLE", "USDC token address unavailable", {
+        retryable: true,
+      });
     }
 
     try {
@@ -146,12 +174,17 @@ export class DelegationFacilitator implements FacilitatorAdapter {
         recipient: record.recipient,
         price: record.price,
         nonce: redemption.nonce,
+        minConfirmations: this.minConfirmations,
+        issuedAt: record.issuedAt,
       });
       this.settled.set(redemption.nonce, settlement);
       return settlement;
     } catch (err) {
-      // Roll the nonce back so a transient receipt-read failure can be retried.
-      record.used = false;
+      // Roll back ONLY for retryable failures (transient receipt-read / not yet
+      // final). A definitive SETTLEMENT_FAILED keeps the nonce burned (H1).
+      if (err instanceof NexusError && err.retryable) {
+        this.nonceStore.rollback(redemption.nonce);
+      }
       throw err;
     }
   }

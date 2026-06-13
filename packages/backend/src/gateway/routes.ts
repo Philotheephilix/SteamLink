@@ -29,10 +29,17 @@ export async function routeJoin(
   backend: Backend,
   name: string,
   body: { roomId: string; delegation: unknown },
+  caller?: Address,
 ): Promise<RouteResult> {
   game(backend, name);
   // The body carries the signed GameDelegation; we trust the structural shape and
   // let `validateCaveats` reject anything unsafe.
+  const delegation = body.delegation as { player?: Address } | undefined;
+  // C5: when auth is active the verified signer MUST be the delegation's player —
+  // you cannot enroll a victim's delegation under your own session.
+  if (caller && delegation?.player && delegation.player.toLowerCase() !== caller.toLowerCase()) {
+    throw new NexusError("NOT_CONNECTED", "verified caller is not the delegation player");
+  }
   const session = await backend.rooms.joinRoom(body.roomId, body.delegation as never);
   return {
     status: 200,
@@ -128,8 +135,10 @@ export async function routeWebhook(
   backend: Backend,
   payload: WebhookPayload,
   headers: Record<string, string>,
+  rawBody?: string,
 ): Promise<RouteResult> {
-  const result = await backend.webhook.ingest(payload, headers);
+  // Thread the RAW body so the HMAC verifier checks the exact signed bytes (C2).
+  const result = await backend.webhook.ingest(payload, headers, rawBody);
   return { status: 200, body: result };
 }
 

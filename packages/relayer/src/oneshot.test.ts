@@ -134,25 +134,67 @@ describe("OneShotRelayer.submitBundle", () => {
       /no transactions/,
     );
   });
+
+  it("HARD-rejects a money bundle whose target can't be determined (H4)", async () => {
+    let posted = false;
+    const { impl } = fakeFetch({
+      "GET /v1/relayer/capabilities": () => jsonRes(CAPS_BODY) as never,
+      "POST /v1/relayer/bundles": () => {
+        posted = true;
+        return jsonRes({ bundleId: "x" }) as never;
+      },
+    });
+    const r = relayer(impl);
+    // Opaque hex delegationContext → target undeterminable; requireTarget set.
+    const money: Bundle = {
+      delegationContext: "0xabcdef" as never,
+      encodedTxns: [{ to: USDC as never, data: "0x" as never }],
+      requireTarget: true,
+    };
+    await expect(r.submitBundle(money)).rejects.toMatchObject({ code: "TARGET_MISMATCH" });
+    expect(posted).toBe(false);
+  });
+
+  it("dedupes a retried submit by idempotencyKey — no double-pay (H4)", async () => {
+    let posts = 0;
+    const { impl } = fakeFetch({
+      "GET /v1/relayer/capabilities": () => jsonRes(CAPS_BODY) as never,
+      "POST /v1/relayer/bundles": () => {
+        posts++;
+        return jsonRes({ bundleId: `1shot_${posts}` }) as never;
+      },
+    });
+    const r = relayer(impl, "https://app.test/nexus/webhook");
+    const money: Bundle = {
+      delegationContext: { to: TARGET } as never,
+      encodedTxns: [{ to: USDC as never, data: "0x" as never }],
+      requireTarget: true,
+      idempotencyKey: "pot:room-1:refund:0xabc",
+    };
+    const first = await r.submitBundle(money);
+    const second = await r.submitBundle(money);
+    expect(first.bundleId).toBe(second.bundleId);
+    expect(posts).toBe(1); // the retry did NOT hit the relayer again
+  });
 });
 
 describe("OneShotRelayer.ingestWebhook", () => {
-  it("emits a StatusEvent to subscribers and dedupes by bundleId", async () => {
+  it("emits a StatusEvent to subscribers and dedupes by bundleId (raw-body path)", async () => {
     const { impl } = fakeFetch({});
     const r = relayer(impl, "https://app.test/nexus/webhook");
     const events: StatusEvent[] = [];
     r.onStatus((e) => events.push(e));
 
-    const headers = { "x-1shot-signature": signWebhook("s", "1shot_abc") };
-    const payload = {
+    const rawBody = JSON.stringify({
       bundleId: "1shot_abc",
-      status: "mined" as const,
-      txHash: "0xfeed" as never,
+      status: "mined",
+      txHash: "0xfeed",
       blockNumber: "0x10",
-    };
-    r.ingestWebhook(payload, headers);
+    });
+    const headers = { "x-1shot-signature": signWebhook("s", rawBody) };
+    r.ingestWebhook(rawBody, headers);
     // Redelivery of the same terminal bundle is dropped.
-    const dup = r.ingestWebhook(payload, headers);
+    const dup = r.ingestWebhook(rawBody, headers);
 
     expect(dup).toBeNull();
     expect(events).toHaveLength(1);
@@ -160,14 +202,49 @@ describe("OneShotRelayer.ingestWebhook", () => {
     expect(events[0]?.blockNumber).toBe(16n);
   });
 
+  it("accepts the object overload when the secret signs the serialized body", async () => {
+    const { impl } = fakeFetch({});
+    const r = relayer(impl, "https://app.test/nexus/webhook");
+    const events: StatusEvent[] = [];
+    r.onStatus((e) => events.push(e));
+    const payload = { bundleId: "obj_1", status: "mined" as const, txHash: "0xfeed" as never };
+    const headers = { "x-1shot-signature": signWebhook("s", JSON.stringify(payload)) };
+    r.ingestWebhook(payload, headers);
+    expect(events).toHaveLength(1);
+  });
+
   it("throws WEBHOOK_UNVERIFIED on a bad signature, emitting nothing", async () => {
     const { impl } = fakeFetch({});
     const r = relayer(impl, "https://app.test/nexus/webhook");
     const events: StatusEvent[] = [];
     r.onStatus((e) => events.push(e));
-    expect(() =>
-      r.ingestWebhook({ bundleId: "b", status: "mined" }, { "x-1shot-signature": "0xdeadbeef" }),
-    ).toThrow(NexusError);
+    const rawBody = JSON.stringify({ bundleId: "b", status: "mined" });
+    expect(() => r.ingestWebhook(rawBody, { "x-1shot-signature": "0xdeadbeef" })).toThrow(
+      NexusError,
+    );
+    expect(events).toHaveLength(0);
+  });
+
+  it("throws WEBHOOK_UNVERIFIED on a missing signature header", async () => {
+    const { impl } = fakeFetch({});
+    const r = relayer(impl, "https://app.test/nexus/webhook");
+    const rawBody = JSON.stringify({ bundleId: "b", status: "mined" });
+    expect(() => r.ingestWebhook(rawBody, {})).toThrow(/missing webhook signature/i);
+  });
+
+  it("rejects a MUTATED body whose signature was computed over the original (C3)", async () => {
+    const { impl } = fakeFetch({});
+    const r = relayer(impl, "https://app.test/nexus/webhook");
+    const events: StatusEvent[] = [];
+    r.onStatus((e) => events.push(e));
+
+    // Attacker signs a benign 'failed' body, then flips it to 'mined' + adds a txHash.
+    const original = JSON.stringify({ bundleId: "atk", status: "failed" });
+    const sig = signWebhook("s", original);
+    const mutated = JSON.stringify({ bundleId: "atk", status: "mined", txHash: "0xbeef" });
+    expect(() => r.ingestWebhook(mutated, { "x-1shot-signature": sig })).toThrow(
+      /signature mismatch/i,
+    );
     expect(events).toHaveLength(0);
   });
 });

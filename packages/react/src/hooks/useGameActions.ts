@@ -35,7 +35,17 @@ export interface MoveOptions {
   optimistic?: MovePlan;
   /** Room id for caveat compilation (turn/limit binding). */
   roomId?: bigint;
+  /**
+   * Max time (ms) to await a terminal status before the bundle is auto-failed:
+   * its optimistic overlay is rolled back and the promise rejects with
+   * `RELAYER_FAILED`, so a lost/never-acked submit can't leave a stuck row or a
+   * promise that hangs forever. Default {@link DEFAULT_MOVE_TIMEOUT_MS} (60s).
+   */
+  timeoutMs?: number;
 }
+
+/** Default terminal-status timeout for a move bundle (ms). */
+export const DEFAULT_MOVE_TIMEOUT_MS = 60_000;
 
 export interface MoveResult {
   bundleId: string;
@@ -129,11 +139,21 @@ export function useGameActions(): UseGameActionsResult {
         setPending((p) => [...p, { bundleId, system }]);
 
         // 3. Submit + await reconciliation.
+        const timeoutMs = options.timeoutMs ?? DEFAULT_MOVE_TIMEOUT_MS;
         const result = await new Promise<MoveResult>((resolve, reject) => {
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          // Settle exactly once: clearing the timer on either outcome so a
+          // terminal status can't leave a timer that later double-fails, and a
+          // timeout/failed status always rolls back the overlay via the reconciler.
           const resolver: PendingResolver = {
-            resolve: (evt) =>
-              resolve({ bundleId, calldata, system, status: evt.status, txHash: evt.txHash }),
-            reject,
+            resolve: (evt) => {
+              if (timer) clearTimeout(timer);
+              resolve({ bundleId, calldata, system, status: evt.status, txHash: evt.txHash });
+            },
+            reject: (err) => {
+              if (timer) clearTimeout(timer);
+              reject(err);
+            },
           };
           manager.trackPending(bundleId, resolver);
 
@@ -147,6 +167,30 @@ export function useGameActions(): UseGameActionsResult {
                 reason: e instanceof Error ? e.message : "submit failed",
               });
             });
+          } else {
+            // No transport.submit: nothing will ever ack this bundle. Fail it
+            // immediately so the optimistic overlay is rolled back and the
+            // promise rejects instead of hanging forever.
+            manager.applyStatus({
+              bundleId,
+              status: "failed",
+              code: "RELAYER_FAILED",
+              reason: "transport has no submit(): cannot send move",
+            });
+            return;
+          }
+
+          // Safety net: any bundle that never receives a terminal status is
+          // auto-failed after timeoutMs (rollback overlay + reject).
+          if (timeoutMs > 0 && Number.isFinite(timeoutMs)) {
+            timer = setTimeout(() => {
+              manager.applyStatus({
+                bundleId,
+                status: "failed",
+                code: "RELAYER_FAILED",
+                reason: `move timed out after ${timeoutMs}ms with no terminal status`,
+              });
+            }, timeoutMs);
           }
         });
         return result;
