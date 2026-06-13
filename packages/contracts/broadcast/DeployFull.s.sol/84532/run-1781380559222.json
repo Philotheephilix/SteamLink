@@ -42,9 +42,7 @@
       "contractName": "TurnManager",
       "contractAddress": "0x8b4b7c086df823b958a7c960c66f5306082d6215",
       "function": null,
-      "arguments": [
-        "0xA3327d90d087cdddfB99E598E50B5Bdee7fC55bD"
-      ],
+      "arguments": ["0xA3327d90d087cdddfB99E598E50B5Bdee7fC55bD"],
       "transaction": {
         "from": "0xa3327d90d087cdddfb99e598e50b5bdee7fc55bd",
         "to": null,
@@ -62,9 +60,7 @@
       "contractName": "CounterGameSystem",
       "contractAddress": "0xc09957c697f19a58df89e9f2f41915799ba67b54",
       "function": null,
-      "arguments": [
-        "0x8B4B7C086Df823B958A7c960C66f5306082d6215"
-      ],
+      "arguments": ["0x8B4B7C086Df823B958A7c960C66f5306082d6215"],
       "transaction": {
         "from": "0xa3327d90d087cdddfb99e598e50b5bdee7fc55bd",
         "to": null,
@@ -148,9 +144,7 @@
       "contractName": "World",
       "contractAddress": "0x67932ca7f33a5a7a0cfa6364de23744c24eb0568",
       "function": "setTrustedForwarder(address)",
-      "arguments": [
-        "0x4EF7ef5f2a05B754d229afeFCB44248C8d7d7C8f"
-      ],
+      "arguments": ["0x4EF7ef5f2a05B754d229afeFCB44248C8d7d7C8f"],
       "transaction": {
         "from": "0xa3327d90d087cdddfb99e598e50b5bdee7fc55bd",
         "to": "0x67932ca7f33a5a7a0cfa6364de23744c24eb0568",
@@ -168,9 +162,7 @@
       "contractName": "CounterGameSystem",
       "contractAddress": "0xc09957c697f19a58df89e9f2f41915799ba67b54",
       "function": "setTrustedRouter(address)",
-      "arguments": [
-        "0x67932Ca7f33A5a7a0cfa6364de23744C24EB0568"
-      ],
+      "arguments": ["0x67932Ca7f33A5a7a0cfa6364de23744C24EB0568"],
       "transaction": {
         "from": "0xa3327d90d087cdddfb99e598e50b5bdee7fc55bd",
         "to": "0xc09957c697f19a58df89e9f2f41915799ba67b54",
@@ -188,10 +180,7 @@
       "contractName": "TurnManager",
       "contractAddress": "0x8b4b7c086df823b958a7c960c66f5306082d6215",
       "function": "authorize(address,bool)",
-      "arguments": [
-        "0xC09957c697F19a58dF89E9F2f41915799Ba67B54",
-        "true"
-      ],
+      "arguments": ["0xC09957c697F19a58dF89E9F2f41915799Ba67B54", "true"],
       "transaction": {
         "from": "0xa3327d90d087cdddfb99e598e50b5bdee7fc55bd",
         "to": "0x8b4b7c086df823b958a7c960c66f5306082d6215",
@@ -209,10 +198,7 @@
       "contractName": "TurnManager",
       "contractAddress": "0x8b4b7c086df823b958a7c960c66f5306082d6215",
       "function": "authorize(address,bool)",
-      "arguments": [
-        "0xA3327d90d087cdddfB99E598E50B5Bdee7fC55bD",
-        "true"
-      ],
+      "arguments": ["0xA3327d90d087cdddfB99E598E50B5Bdee7fC55bD", "true"],
       "transaction": {
         "from": "0xa3327d90d087cdddfb99e598e50b5bdee7fc55bd",
         "to": "0x8b4b7c086df823b958a7c960c66f5306082d6215",
@@ -230,9 +216,7 @@
       "contractName": "TurnManager",
       "contractAddress": "0x8b4b7c086df823b958a7c960c66f5306082d6215",
       "function": "setTrustedRouter(address)",
-      "arguments": [
-        "0x67932Ca7f33A5a7a0cfa6364de23744C24EB0568"
-      ],
+      "arguments": ["0x67932Ca7f33A5a7a0cfa6364de23744C24EB0568"],
       "transaction": {
         "from": "0xa3327d90d087cdddfb99e598e50b5bdee7fc55bd",
         "to": "0x8b4b7c086df823b958a7c960c66f5306082d6215",
@@ -401,9 +385,7 @@
       "logs": [
         {
           "address": "0x67932ca7f33a5a7a0cfa6364de23744c24eb0568",
-          "topics": [
-            "0x2ff4f36f7bcd5d4c260c49696c9d2b7c01d486e2d5ef32b48da03461a743dfe8"
-          ],
+          "topics": ["0x2ff4f36f7bcd5d4c260c49696c9d2b7c01d486e2d5ef32b48da03461a743dfe8"],
           "data": "0x6e657875732e776f726c642e7631000000000000000000000000000000000000",
           "blockHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
           "blockNumber": "0x28d2b5b",

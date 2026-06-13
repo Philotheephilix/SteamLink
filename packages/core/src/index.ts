@@ -34,6 +34,7 @@ export {
   encodeExecution,
   buildMoveExecution,
   buildChargeExecution,
+  buildChargeFromExecution,
   buildRedeemCalldata,
   usdcToWei,
   MANAGER_ABI,

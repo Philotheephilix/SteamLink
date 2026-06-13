@@ -15,6 +15,9 @@ import {LimitedCallsEnforcer} from "../src/enforcers/LimitedCallsEnforcer.sol";
 import {PerActionCapEnforcer} from "../src/enforcers/PerActionCapEnforcer.sol";
 import {ERC20TransferAmountEnforcer} from "../src/enforcers/ERC20TransferAmountEnforcer.sol";
 import {AllowedRecipientsEnforcer} from "../src/enforcers/AllowedRecipientsEnforcer.sol";
+import {TestUSDC} from "../src/mocks/TestUSDC.sol";
+import {Pot} from "../src/Pot.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 /**
  * @notice Full Nexus deployment for the live test suite: World + the real
@@ -70,6 +73,13 @@ contract DeployFull is Script {
         ERC20TransferAmountEnforcer erc20TransferAmount = new ERC20TransferAmountEnforcer();
         AllowedRecipientsEnforcer allowedRecipients = new AllowedRecipientsEnforcer();
 
+        // ── LOCAL x402 budget rails: a real 6-decimals TestUSDC + a Pot to receive
+        //    charges. The deployer (the payer/relayer on anvil) is minted a balance.
+        //    On Base Sepolia the TS suite ignores `testUsdc` and uses canonical USDC.
+        TestUSDC testUsdc = new TestUSDC();
+        Pot pot = new Pot(IERC20(address(testUsdc)), msg.sender, msg.sender, 0);
+        testUsdc.mint(msg.sender, 1000e6);
+
         vm.stopBroadcast();
 
         // ── emit addresses as JSON ──
@@ -89,6 +99,8 @@ contract DeployFull is Script {
         vm.serializeAddress(root, "turnManager", address(tm));
         vm.serializeAddress(root, "counterGame", address(game));
         vm.serializeBytes32(root, "counterGameSystemId", bytes32("CounterGame"));
+        vm.serializeAddress(root, "testUsdc", address(testUsdc));
+        vm.serializeAddress(root, "pot", address(pot));
         vm.serializeUint(root, "roomId", roomId);
         string memory out = vm.serializeString(root, "enforcers", enforcersJson);
 

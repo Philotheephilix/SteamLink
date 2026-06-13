@@ -190,6 +190,40 @@ export function buildChargeExecution(
   return encodeExecution(addrs.usdc, 0n, transfer);
 }
 
+/**
+ * Build the executionCalldata for a charge that moves the PAYER's funds:
+ * USDC.transferFrom(from, recipient, amount). When redeemed through the manager,
+ * the manager is `msg.sender` to the token, so `from` must have approved the
+ * manager. This is the variant that actually debits the payer (unlike
+ * `buildChargeExecution`, whose `transfer` would move the manager's own — zero —
+ * balance).
+ */
+export function buildChargeFromExecution(
+  addrs: DeploymentAddresses,
+  from: Address,
+  recipient: Address,
+  amount: string,
+): Hex {
+  const transferFrom = encodeFunctionData({
+    abi: [
+      {
+        type: "function",
+        name: "transferFrom",
+        inputs: [
+          { name: "from", type: "address" },
+          { name: "to", type: "address" },
+          { name: "amount", type: "uint256" },
+        ],
+        outputs: [{ name: "", type: "bool" }],
+        stateMutability: "nonpayable",
+      },
+    ],
+    functionName: "transferFrom",
+    args: [from, recipient, usdcToWei(amount)],
+  });
+  return encodeExecution(addrs.usdc, 0n, transferFrom);
+}
+
 // ── signing & encoding ────────────────────────────────────────────────────
 
 /**

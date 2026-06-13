@@ -13,6 +13,10 @@ export interface DeployedNexus extends DeploymentAddresses {
   counterGame: Address;
   counterGameSystemId: Hex;
   roomId: bigint;
+  /** LOCAL-only TestUSDC (6 decimals) — the budget token for charge tests on anvil. */
+  testUsdc: Address;
+  /** The Pot deployed for the charge tests — the allowed charge recipient. */
+  pot: Address;
 }
 
 export interface DeployParams {
@@ -66,6 +70,8 @@ export function deployNexus(p: DeployParams): DeployedNexus {
     counterGame: j.counterGame,
     counterGameSystemId: j.counterGameSystemId,
     roomId: BigInt(j.roomId),
+    testUsdc: j.testUsdc,
+    pot: j.pot,
     usdc: "0x0000000000000000000000000000000000000000", // not used by the counter game
     enforcers: {
       turnBound: j.enforcers.turnBound,
