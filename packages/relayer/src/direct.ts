@@ -1,12 +1,5 @@
 import { NexusError, type Address, type Hex, asAddress } from "@nexus/types";
-import {
-  type Account,
-  type Chain,
-  type PublicClient,
-  type WalletClient,
-  type Transport,
-  decodeErrorResult,
-} from "viem";
+import { BaseError, type Account, type Chain, type PublicClient, type WalletClient, type Transport } from "viem";
 import type {
   Bundle,
   BundleHandle,
@@ -132,14 +125,26 @@ export class DirectRelayer implements RelayerAdapter {
   }
 }
 
-function stringifyErr(err: unknown): string {
-  if (err && typeof err === "object" && "data" in err) {
-    try {
-      const decoded = decodeErrorResult({ data: (err as { data: Hex }).data, abi: [] });
-      return decoded.errorName;
-    } catch {
-      /* fall through */
-    }
+/**
+ * Surface the revert data hex (the 4-byte custom-error selector + args) so the
+ * SDK/test layer can decode it structurally against the known error ABIs. We do
+ * NOT decode here — the relayer is game-agnostic and must not embed game ABIs.
+ */
+export function revertDataOf(err: unknown): Hex | undefined {
+  if (err instanceof BaseError) {
+    const walked = err.walk((e) => typeof (e as { data?: unknown }).data === "string");
+    const data = (walked as { data?: unknown } | null)?.data;
+    if (typeof data === "string" && data.startsWith("0x")) return data as Hex;
   }
-  return err instanceof Error ? err.message : String(err);
+  if (err && typeof err === "object" && "data" in err) {
+    const data = (err as { data?: unknown }).data;
+    if (typeof data === "string" && data.startsWith("0x")) return data as Hex;
+  }
+  return undefined;
+}
+
+function stringifyErr(err: unknown): string {
+  const data = revertDataOf(err);
+  const msg = err instanceof Error ? err.message : String(err);
+  return data ? `${msg} [revert ${data}]` : msg;
 }
