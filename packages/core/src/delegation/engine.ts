@@ -42,6 +42,7 @@ const DELEGATION_TUPLE = [
         ],
       },
       { name: "salt", type: "uint256" },
+      { name: "maxRedemptions", type: "uint256" },
       { name: "signature", type: "bytes" },
     ],
   },
@@ -204,14 +205,19 @@ export async function signDelegation(
     delegate: Address;
     caveats: Caveat[];
     salt?: bigint;
+    /** Replay bound — how many redemptions this one signature authorizes. Default 1. */
+    maxRedemptions?: bigint;
   },
 ): Promise<SignedDelegation> {
+  const maxRedemptions = params.maxRedemptions ?? 1n;
+  if (maxRedemptions <= 0n) throw new Error("maxRedemptions must be > 0");
   const unsigned: UnsignedDelegation = {
     delegate: params.delegate,
     delegator: player.address,
     authority: ROOT_AUTHORITY,
     caveats: params.caveats,
     salt: params.salt ?? 0n,
+    maxRedemptions,
   };
   const signature = await player.signTypedData({
     domain: eip712Domain(params.chainId, params.delegationManager),

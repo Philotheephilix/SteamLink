@@ -31,7 +31,7 @@ contract DeployWorld is Script {
         CounterGameSystem game = new CounterGameSystem(address(tm));
 
         CounterTable.register(IWorld(address(world)));
-        world.registerSystem(bytes32("CounterGame"), address(game), false);
+        world.registerSystem(bytes32("CounterGame"), address(game));
         world.grantWriteAccess(CounterTable.tableId(), address(game));
         tm.authorize(address(game), true);
 

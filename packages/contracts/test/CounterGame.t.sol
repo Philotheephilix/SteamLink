@@ -42,7 +42,7 @@ contract CounterGameTest is Test {
 
         // register table + system
         CounterTable.register(IWorld(address(world)));
-        world.registerSystem(GAME_SYSTEM_ID, address(game), false);
+        world.registerSystem(GAME_SYSTEM_ID, address(game));
 
         // grant the game system write access to the Counter table
         world.grantWriteAccess(CounterTable.tableId(), address(game));

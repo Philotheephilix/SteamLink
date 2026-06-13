@@ -35,7 +35,7 @@ contract SenderSpoofingTest is Test {
         game = new CounterGameSystem(address(tm));
 
         CounterTable.register(IWorld(address(world)));
-        world.registerSystem(GAME_SYSTEM_ID, address(game), false);
+        world.registerSystem(GAME_SYSTEM_ID, address(game));
         world.grantWriteAccess(CounterTable.tableId(), address(game));
         game.setTrustedRouter(address(world));
         tm.authorize(address(game), true);

@@ -112,6 +112,7 @@ const MANAGER_VIEW_ABI = [
             ],
           },
           { name: "salt", type: "uint256" },
+          { name: "maxRedemptions", type: "uint256" },
           { name: "signature", type: "bytes" },
         ],
       },
@@ -238,6 +239,7 @@ export async function runIntegration(t: IntegrationTarget): Promise<number> {
         authority: signed.authority,
         caveats: signed.caveats,
         salt: signed.salt,
+        maxRedemptions: signed.maxRedemptions,
       },
     });
     const onchainDigest = await pub.readContract({

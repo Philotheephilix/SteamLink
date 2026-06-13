@@ -14,6 +14,8 @@ export interface UnsignedDelegation {
   authority: Hex;
   caveats: Caveat[];
   salt: bigint;
+  /** How many times this signed delegation may be redeemed (replay bound). */
+  maxRedemptions: bigint;
 }
 
 /** A delegation with the player's EIP-712 signature attached. */

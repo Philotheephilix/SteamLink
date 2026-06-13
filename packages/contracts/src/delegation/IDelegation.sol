@@ -41,6 +41,7 @@ struct Delegation {
     bytes32 authority;
     Caveat[] caveats;
     uint256 salt;
+    uint256 maxRedemptions;
     bytes signature;
 }
 

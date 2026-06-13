@@ -96,6 +96,7 @@ describe("signDelegation", () => {
         authority: signed.authority,
         caveats: signed.caveats,
         salt: signed.salt,
+        maxRedemptions: signed.maxRedemptions,
       },
       signature: signed.signature,
     });

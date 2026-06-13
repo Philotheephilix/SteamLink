@@ -16,23 +16,21 @@ interface ITurnManager {
 /**
  * @title TurnManager
  * @notice Built-in engine system (design §6.4). Owns turn order, per-turn deadline
- *         blocks, and a permissionless AFK timeout/skip that slashes a deposit
- *         fraction and rewards the reporter — turn enforcement with no off-chain
- *         referee.
+ *         blocks, and a permissionless AFK timeout/skip that rotates the turn once
+ *         the on-chain deadline passes — turn enforcement with no off-chain referee.
  *
  * @dev    Turn state lives in this contract's own storage. Mutating turn calls
- *         (`startTurns`, `advance`, `setDirection`, `postDeposit`) are restricted
- *         to AUTHORIZED callers — the World and writer-granted game systems —
- *         configured by the admin. `timeout` is intentionally permissionless,
- *         gated purely by the on-chain deadline.
+ *         (`startTurns`, `advance`, `setDirection`) are restricted to AUTHORIZED
+ *         callers — the World and writer-granted game systems — configured by the
+ *         admin. `timeout` is intentionally permissionless, gated purely by the
+ *         on-chain deadline, and moves NO funds (no deposit/slash economics live
+ *         here; pot custody is handled by `Pot`).
  *
  *         `_msgSender()` (the redemption seam) resolves the true player from the
- *         ERC-2771 trailing bytes the World appends, so reporter rewards and
- *         deposits attribute to the real player even when relayed.
+ *         ERC-2771 trailing bytes the World appends, attributing actions to the
+ *         real player even when relayed.
  */
 contract TurnManager is System {
-    uint256 public constant AFK_SLASH_BPS = 1000; // 10% of deposit slashed on timeout
-
     struct Turn {
         bool active;
         address current;
@@ -50,7 +48,6 @@ contract TurnManager is System {
     mapping(uint256 roomId => Turn) internal _turn;
     mapping(uint256 roomId => address[]) internal _seats;
     mapping(uint256 roomId => mapping(address player => uint256)) internal _seatIndexPlus1;
-    mapping(address player => uint256) public deposits;
 
     error TurnManager_NotActive(uint256 roomId);
     error TurnManager_DeadlineNotPassed(uint256 roomId);
@@ -61,7 +58,9 @@ contract TurnManager is System {
 
     event TurnManager_Started(uint256 indexed roomId, address[] order, uint64 deadlineBlock);
     event TurnManager_Advanced(uint256 indexed roomId, address current, uint16 turnIndex, uint64 deadlineBlock);
-    event TurnManager_TimedOut(uint256 indexed roomId, address skipped, address reporter, uint256 slashAmount);
+    event TurnManager_TimedOut(uint256 indexed roomId, address skipped, address reporter);
+    event TurnManager_Authorized(address indexed caller, bool ok);
+    event TurnManager_DirectionSet(uint256 indexed roomId, int8 direction);
 
     modifier onlyAdmin() {
         if (msg.sender != admin) revert TurnManager_NotAdmin();
@@ -80,15 +79,17 @@ contract TurnManager is System {
 
     function authorize(address caller, bool ok) external onlyAdmin {
         authorized[caller] = ok;
+        emit TurnManager_Authorized(caller, ok);
     }
 
     function setTrustedRouter(address router) external onlyAdmin {
         _setTrustedRouter(router);
     }
 
-    /// @dev Reporter resolution: only trust the ERC-2771 appended sender when the
-    ///      immediate caller is the trusted router (the World). Otherwise the
-    ///      reporter is the direct `msg.sender` (permissionless path).
+    /// @dev Reporter resolution (for event attribution only — no funds move): only
+    ///      trust the ERC-2771 appended sender when the immediate caller is the
+    ///      trusted router (the World). Otherwise the reporter is the direct
+    ///      `msg.sender` (permissionless path).
     function _reporter() internal view returns (address) {
         if (msg.sender == trustedRouter && trustedRouter != address(0)) {
             return _msgSender();
@@ -112,13 +113,6 @@ contract TurnManager is System {
 
     function seatsOf(uint256 roomId) external view returns (address[] memory) {
         return _seats[roomId];
-    }
-
-    // ── deposit bookkeeping (funding wires to pots in later phases) ──
-    /// @dev `player` is explicit so authorized callers (game systems / the World)
-    ///      can post on a player's behalf without relying on the calldata seam.
-    function postDeposit(address player, uint256 amount) external onlyAuthorized {
-        deposits[player] += amount;
     }
 
     // ── lifecycle ──
@@ -156,26 +150,23 @@ contract TurnManager is System {
         Turn storage t = _turn[roomId];
         if (!t.active) revert TurnManager_NotActive(roomId);
         t.direction = direction;
+        emit TurnManager_DirectionSet(roomId, direction);
     }
 
     /// @notice Permissionless AFK-skip. Gated purely by the on-chain deadline.
-    ///         Any caller may report; the reporter (`_msgSender()`) earns the slash.
+    ///         Any caller may report once the deadline passes; the current seat is
+    ///         skipped and the turn rotates. NO funds move — this is a pure liveness
+    ///         mechanism with no slash/reward economics.
     function timeout(uint256 roomId) external {
         Turn storage t = _turn[roomId];
         if (!t.active) revert TurnManager_NotActive(roomId);
         if (block.number <= t.deadlineBlock) revert TurnManager_DeadlineNotPassed(roomId);
 
         address skipped = t.current;
-        uint256 dep = deposits[skipped];
-        uint256 slash = (dep * AFK_SLASH_BPS) / 10_000;
         address reporter = _reporter();
-        if (slash > 0) {
-            deposits[skipped] = dep - slash;
-            deposits[reporter] += slash; // reward the reporter
-        }
 
         _rotate(roomId, t);
-        emit TurnManager_TimedOut(roomId, skipped, reporter, slash);
+        emit TurnManager_TimedOut(roomId, skipped, reporter);
     }
 
     function _rotate(uint256 roomId, Turn storage t) internal {

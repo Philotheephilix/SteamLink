@@ -46,7 +46,7 @@ contract NexusDelegationManagerTest is Test {
         game = new CounterGameSystem(address(tm));
 
         CounterTable.register(IWorld(address(world)));
-        world.registerSystem(GAME_SYSTEM_ID, address(game), false);
+        world.registerSystem(GAME_SYSTEM_ID, address(game));
         world.grantWriteAccess(CounterTable.tableId(), address(game));
         game.setTrustedRouter(address(world));
         tm.authorize(address(game), true);
@@ -114,6 +114,7 @@ contract NexusDelegationManagerTest is Test {
             authority: bytes32(0),
             caveats: _emptyCaveats(),
             salt: 1,
+            maxRedemptions: 1,
             signature: ""
         });
         d = _signDelegation(d, alicePk);
@@ -137,6 +138,7 @@ contract NexusDelegationManagerTest is Test {
             authority: bytes32(0),
             caveats: _emptyCaveats(),
             salt: 2,
+            maxRedemptions: 1,
             signature: ""
         });
         d = _signDelegation(d, alicePk);
@@ -156,6 +158,7 @@ contract NexusDelegationManagerTest is Test {
             authority: bytes32(0),
             caveats: _emptyCaveats(),
             salt: 3,
+            maxRedemptions: 1,
             signature: ""
         });
         d = _signDelegation(d, bobPk); // wrong key
@@ -172,6 +175,7 @@ contract NexusDelegationManagerTest is Test {
             authority: bytes32(0),
             caveats: _emptyCaveats(),
             salt: 4,
+            maxRedemptions: 1,
             signature: ""
         });
         d = _signDelegation(d, alicePk);
@@ -193,6 +197,7 @@ contract NexusDelegationManagerTest is Test {
             authority: bytes32(0),
             caveats: _emptyCaveats(),
             salt: 5,
+            maxRedemptions: 1,
             signature: ""
         });
         d = _signDelegation(d, alicePk);
@@ -211,6 +216,7 @@ contract NexusDelegationManagerTest is Test {
             authority: bytes32(0),
             caveats: _emptyCaveats(),
             salt: 6,
+            maxRedemptions: 1,
             signature: ""
         });
         d = _signDelegation(d, alicePk);
@@ -238,6 +244,7 @@ contract NexusDelegationManagerTest is Test {
             authority: bytes32(0),
             caveats: caveats,
             salt: 7,
+            maxRedemptions: 1,
             signature: ""
         });
         d = _signDelegation(d, bobPk);
@@ -261,6 +268,7 @@ contract NexusDelegationManagerTest is Test {
             authority: bytes32(0),
             caveats: caveats,
             salt: 8,
+            maxRedemptions: 1,
             signature: ""
         });
         d = _signDelegation(d, alicePk);
@@ -290,6 +298,7 @@ contract NexusDelegationManagerTest is Test {
             authority: bytes32(0),
             caveats: caveats,
             salt: 9,
+            maxRedemptions: 1,
             signature: ""
         });
         d = _signDelegation(d, alicePk);
@@ -310,6 +319,7 @@ contract NexusDelegationManagerTest is Test {
             authority: bytes32(0),
             caveats: _emptyCaveats(),
             salt: 10,
+            maxRedemptions: 1,
             signature: ""
         });
 
@@ -321,5 +331,109 @@ contract NexusDelegationManagerTest is Test {
         // stable across calls
         assertEq(ds, manager.domainSeparator());
         assertEq(h, manager.getDelegationHash(d));
+    }
+
+    // ── C1: bounded replay guard via signed maxRedemptions ──
+
+    function test_Replay_BeyondMaxRedemptions_Reverts() public {
+        // maxRedemptions = 1: first redeem ok, second reverts with the limit error.
+        Delegation memory d = Delegation({
+            delegate: relayer,
+            delegator: alice,
+            authority: bytes32(0),
+            caveats: _emptyCaveats(),
+            salt: 100,
+            maxRedemptions: 1,
+            signature: ""
+        });
+        d = _signDelegation(d, alicePk);
+
+        vm.prank(relayer);
+        _redeem(d, _execForWorldCall(_incrementCall()));
+
+        bytes32 h = manager.getDelegationHash(this._passthrough(d));
+        assertEq(manager.redemptionsOf(h), 1);
+
+        vm.prank(relayer);
+        vm.expectRevert(
+            abi.encodeWithSelector(NexusDelegationManager.DelegationRedemptionLimitReached.selector, h)
+        );
+        _redeem(d, _execForWorldCall(_incrementCall()));
+    }
+
+    function test_Redemption_WithinMaxRedemptions_Succeeds() public {
+        // maxRedemptions = 2: two redemptions both succeed; the counter tracks them.
+        // Use a plain ERC-20 transfer target (no turn-state dependency) so the
+        // action can repeat independent of the game's turn rotation.
+        MockERC20 token = new MockERC20();
+        token.mint(address(manager), 10);
+
+        Delegation memory d = Delegation({
+            delegate: address(0), // open so any relayer can redeem repeatedly
+            delegator: alice,
+            authority: bytes32(0),
+            caveats: _emptyCaveats(),
+            salt: 101,
+            maxRedemptions: 2,
+            signature: ""
+        });
+        d = _signDelegation(d, alicePk);
+
+        bytes memory transferCall = abi.encodeWithSignature("transfer(address,uint256)", bob, uint256(1));
+        bytes memory exec = abi.encodePacked(address(token), uint256(0), transferCall);
+
+        vm.prank(address(0x1111));
+        _redeem(d, exec);
+        vm.prank(address(0x2222));
+        _redeem(d, exec);
+
+        bytes32 h = manager.getDelegationHash(this._passthrough(d));
+        assertEq(manager.redemptionsOf(h), 2);
+        assertEq(token.balanceOf(bob), 2);
+
+        // third redemption exceeds the cap.
+        vm.prank(address(0x3333));
+        vm.expectRevert(
+            abi.encodeWithSelector(NexusDelegationManager.DelegationRedemptionLimitReached.selector, h)
+        );
+        _redeem(d, exec);
+    }
+
+    function test_ZeroMaxRedemptions_Reverts() public {
+        Delegation memory d = Delegation({
+            delegate: relayer,
+            delegator: alice,
+            authority: bytes32(0),
+            caveats: _emptyCaveats(),
+            salt: 102,
+            maxRedemptions: 0,
+            signature: ""
+        });
+        d = _signDelegation(d, alicePk);
+
+        vm.prank(relayer);
+        vm.expectRevert(NexusDelegationManager.ZeroMaxRedemptions.selector);
+        _redeem(d, _execForWorldCall(_incrementCall()));
+    }
+
+    // ── C2: only root authority (bytes32(0)) is supported ──
+    function test_NonRootAuthority_Reverts() public {
+        bytes32 authority = bytes32(uint256(0xDEAD));
+        Delegation memory d = Delegation({
+            delegate: relayer,
+            delegator: alice,
+            authority: authority,
+            caveats: _emptyCaveats(),
+            salt: 103,
+            maxRedemptions: 1,
+            signature: ""
+        });
+        d = _signDelegation(d, alicePk);
+
+        vm.prank(relayer);
+        vm.expectRevert(
+            abi.encodeWithSelector(NexusDelegationManager.NonRootAuthorityUnsupported.selector, authority)
+        );
+        _redeem(d, _execForWorldCall(_incrementCall()));
     }
 }

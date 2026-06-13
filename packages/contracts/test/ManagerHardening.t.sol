@@ -68,6 +68,7 @@ contract ManagerHardeningTest is Test {
             authority: bytes32(0),
             caveats: new Caveat[](0),
             salt: salt,
+            maxRedemptions: 1,
             signature: ""
         });
         return _signed(d, alicePk);

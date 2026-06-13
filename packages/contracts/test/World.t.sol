@@ -5,6 +5,7 @@ import {Test} from "forge-std/Test.sol";
 import {World} from "../src/world/World.sol";
 import {IWorld, IStoreEvents} from "../src/world/IWorld.sol";
 import {System} from "../src/system/System.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
 /// @dev Minimal system that echoes back the resolved player (_msgSender).
 contract EchoSystem is System {
@@ -41,7 +42,7 @@ contract WorldTest is Test {
         string[] memory f = new string[](1);
         f[0] = "value";
         world.registerTable(TABLE_ID, bytes32(uint256(1)), bytes32(uint256(1)), f);
-        world.registerSystem(SYSTEM_ID, address(echo), false);
+        world.registerSystem(SYSTEM_ID, address(echo));
         echo.setTrustedRouter(address(world));
     }
 
@@ -99,7 +100,7 @@ contract WorldTest is Test {
     function test_RegisterTable_OnlyOwner() public {
         string[] memory f = new string[](0);
         vm.prank(alice);
-        vm.expectRevert(World.World_NotOwner.selector);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, alice));
         world.registerTable(bytes32("X"), 0, 0, f);
     }
 

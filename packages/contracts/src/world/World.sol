@@ -2,6 +2,8 @@
 pragma solidity ^0.8.23;
 
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import {IWorld} from "./IWorld.sol";
 
 /**
@@ -18,7 +20,7 @@ import {IWorld} from "./IWorld.sol";
  *         calldata (ERC-2771 style) and appends it to the system callData so the
  *         `System` base recovers the true player via `_msgSender()`.
  */
-contract World is IWorld, ReentrancyGuard {
+contract World is IWorld, ReentrancyGuard, Ownable2Step {
     bytes32 public constant WORLD_VERSION = bytes32("nexus.world.v1");
 
     // ── registries ──
@@ -30,7 +32,6 @@ contract World is IWorld, ReentrancyGuard {
 
     mapping(bytes32 tableId => TableSchema) internal _tables;
     mapping(bytes32 systemId => address) internal _systems;
-    mapping(bytes32 systemId => bool) internal _systemPublic;
 
     // ── record store: tableId => keyHash => packed record ──
     mapping(bytes32 tableId => mapping(bytes32 keyHash => bytes)) internal _staticStore;
@@ -38,25 +39,23 @@ contract World is IWorld, ReentrancyGuard {
     mapping(bytes32 tableId => mapping(bytes32 keyHash => bool)) internal _exists;
 
     // ── access control ──
-    address public owner;
     address public trustedForwarder;
     mapping(bytes32 tableId => mapping(address writer => bool)) public canWrite;
 
     // ── errors ──
-    error World_NotOwner();
     error World_TableNotFound(bytes32 tableId);
     error World_TableExists(bytes32 tableId);
     error World_SystemNotFound(bytes32 systemId);
     error World_AccessDenied(bytes32 tableId, address caller);
     error World_RecordNotFound(bytes32 tableId);
+    error World_ZeroSystemAddress();
 
-    modifier onlyOwner() {
-        if (msg.sender != owner) revert World_NotOwner();
-        _;
-    }
+    // ── admin events ──
+    event World_TrustedForwarderSet(address indexed forwarder);
+    event World_WriteAccessGranted(bytes32 indexed tableId, address indexed writer);
+    event World_WriteAccessRevoked(bytes32 indexed tableId, address indexed writer);
 
-    constructor() {
-        owner = msg.sender;
+    constructor() Ownable(msg.sender) {
         emit World_HelloWorld(WORLD_VERSION);
     }
 
@@ -64,21 +63,24 @@ contract World is IWorld, ReentrancyGuard {
     // Access-control admin
     // ─────────────────────────────────────────────────────────────────────────
 
+    /// @dev One-time lock: the forwarder (the DelegationManager) is wired exactly
+    ///      once at deploy time and can never be re-pointed at an attacker contract.
+    ///      Mirrors System._setTrustedRouter.
     function setTrustedForwarder(address forwarder) external onlyOwner {
+        require(trustedForwarder == address(0), "forwarder already set");
         trustedForwarder = forwarder;
+        emit World_TrustedForwarderSet(forwarder);
     }
 
     function grantWriteAccess(bytes32 tableId, address writer) external onlyOwner {
         if (!_tables[tableId].registered) revert World_TableNotFound(tableId);
         canWrite[tableId][writer] = true;
+        emit World_WriteAccessGranted(tableId, writer);
     }
 
     function revokeWriteAccess(bytes32 tableId, address writer) external onlyOwner {
         canWrite[tableId][writer] = false;
-    }
-
-    function transferOwnership(address newOwner) external onlyOwner {
-        owner = newOwner;
+        emit World_WriteAccessRevoked(tableId, writer);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -96,10 +98,14 @@ contract World is IWorld, ReentrancyGuard {
         emit World_TableRegistered(tableId, keySchema, valueSchema, fieldNames);
     }
 
-    function registerSystem(bytes32 systemId, address systemAddr, bool publicAccess) external onlyOwner {
+    /// @notice Register (or replace) a system implementation under `systemId`.
+    /// @dev    System-call AUTHORIZATION is NOT enforced here: every registered
+    ///         system is routable via `call`. Per-action access control is enforced
+    ///         at the delegation/enforcer layer (caveats), not by the registry.
+    function registerSystem(bytes32 systemId, address systemAddr) external onlyOwner {
+        if (systemAddr == address(0)) revert World_ZeroSystemAddress();
         _systems[systemId] = systemAddr;
-        _systemPublic[systemId] = publicAccess;
-        emit World_SystemRegistered(systemId, systemAddr, publicAccess);
+        emit World_SystemRegistered(systemId, systemAddr);
     }
 
     function getSystemAddress(bytes32 systemId) external view returns (address) {
@@ -167,7 +173,6 @@ contract World is IWorld, ReentrancyGuard {
      */
     function call(bytes32 systemId, bytes calldata callData)
         external
-        payable
         nonReentrant
         returns (bytes memory)
     {
@@ -178,7 +183,7 @@ contract World is IWorld, ReentrancyGuard {
         // ERC-2771 trailing-bytes append: callData ++ sender(20 bytes)
         bytes memory payload = abi.encodePacked(callData, sender);
 
-        (bool ok, bytes memory ret) = systemAddr.call{value: msg.value}(payload);
+        (bool ok, bytes memory ret) = systemAddr.call(payload);
         if (!ok) {
             // bubble the revert reason / named custom error unchanged
             assembly {

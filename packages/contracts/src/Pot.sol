@@ -34,6 +34,7 @@ contract Pot is ReentrancyGuard {
     error Pot_AlreadyOpen(uint256 roomId);
     error Pot_AlreadySettled(uint256 roomId);
     error Pot_RakeTooHigh();
+    error Pot_WinnerNotParticipant(uint256 roomId, address winner);
 
     event Pot_Opened(uint256 indexed roomId);
     event Pot_Deposited(uint256 indexed roomId, address indexed player, uint256 amount);
@@ -52,7 +53,7 @@ contract Pot is ReentrancyGuard {
         _;
     }
 
-    function openPot(uint256 roomId) external {
+    function openPot(uint256 roomId) external onlySettleAuthority {
         if (pots[roomId].open || pots[roomId].settled) revert Pot_AlreadyOpen(roomId);
         pots[roomId].open = true;
         emit Pot_Opened(roomId);
@@ -75,6 +76,7 @@ contract Pot is ReentrancyGuard {
         PotState storage p = pots[roomId];
         if (!p.open) revert Pot_NotOpen(roomId);
         if (p.settled) revert Pot_AlreadySettled(roomId);
+        if (deposited[roomId][winner] == 0) revert Pot_WinnerNotParticipant(roomId, winner);
 
         uint256 total = p.balance;
         uint256 rake = (total * rakeBps) / 10_000;

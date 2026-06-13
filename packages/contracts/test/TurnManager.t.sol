@@ -59,26 +59,22 @@ contract TurnManagerTest is Test {
         tm.timeout(1);
     }
 
-    function test_Timeout_AfterDeadline_SkipsSlashesRewards() public {
+    function test_Timeout_AfterDeadline_SkipsWithoutMovingFunds() public {
         tm.startTurns(1, _order(), TURN_BLOCKS);
-
-        // admin (this contract) is authorized; post the AFK player's deposit explicitly
-        tm.postDeposit(a, 1000);
-        assertEq(tm.deposits(a), 1000);
 
         // roll past deadline
         vm.roll(block.number + TURN_BLOCKS + 1);
 
-        uint256 expectedSlash = (1000 * tm.AFK_SLASH_BPS()) / 10_000; // 10% = 100
-
+        // permissionless skip: rotates the turn, moves no funds, emits TimedOut.
         vm.expectEmit(true, false, false, true, address(tm));
-        emit TurnManager.TurnManager_TimedOut(1, a, reporter, expectedSlash);
+        emit TurnManager.TurnManager_TimedOut(1, a, reporter);
         vm.prank(reporter);
         tm.timeout(1);
 
         assertEq(tm.getCurrent(1), b); // skipped a -> b
-        assertEq(tm.deposits(a), 1000 - expectedSlash);
-        assertEq(tm.deposits(reporter), expectedSlash);
+
+        // no balance/ETH moved by the contract
+        assertEq(address(tm).balance, 0);
     }
 
     function test_Authorize_Gating() public {

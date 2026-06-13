@@ -44,11 +44,11 @@ contract NexusDelegationManager is IDelegationManager, ReentrancyGuard {
         keccak256("Caveat(address enforcer,bytes terms,bytes args)");
 
     // DELEGATION_TYPEHASH = keccak256(
-    //   "Delegation(address delegate,address delegator,bytes32 authority,Caveat[] caveats,uint256 salt)"
+    //   "Delegation(address delegate,address delegator,bytes32 authority,Caveat[] caveats,uint256 salt,uint256 maxRedemptions)"
     //   "Caveat(address enforcer,bytes terms,bytes args)"
     // )
     bytes32 public constant DELEGATION_TYPEHASH = keccak256(
-        "Delegation(address delegate,address delegator,bytes32 authority,Caveat[] caveats,uint256 salt)Caveat(address enforcer,bytes terms,bytes args)"
+        "Delegation(address delegate,address delegator,bytes32 authority,Caveat[] caveats,uint256 salt,uint256 maxRedemptions)Caveat(address enforcer,bytes terms,bytes args)"
     );
 
     // EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)
@@ -70,6 +70,17 @@ contract NexusDelegationManager is IDelegationManager, ReentrancyGuard {
     /// @notice The manager holds no ETH and is non-payable; non-zero `value` in a
     ///         decoded execution is unsupported.
     error NonZeroValueUnsupported();
+    /// @notice The signed `maxRedemptions` cap has been reached for this delegation.
+    error DelegationRedemptionLimitReached(bytes32 delegationHash);
+    /// @notice A delegation signed with `maxRedemptions == 0` is unusable.
+    error ZeroMaxRedemptions();
+    /// @notice Only root authority (bytes32(0)) delegations are supported; delegation
+    ///         chains are not implemented in this manager.
+    error NonRootAuthorityUnsupported(bytes32 authority);
+
+    // ── replay guard: per-delegation redemption counter keyed on the EIP-712
+    //    struct hash (same value returned by getDelegationHash) ──
+    mapping(bytes32 => uint256) public redemptionsOf;
 
     // ── events ──
     event Redeemed(
@@ -108,11 +119,13 @@ contract NexusDelegationManager is IDelegationManager, ReentrancyGuard {
     }
 
     function _hashCaveatsArray(Caveat[] memory caveats) private pure returns (bytes32) {
-        bytes memory packed;
+        // Linear-cost EIP-712 array hash: hash each element, then keccak the
+        // concatenation. Equivalent encoding to the previous accumulation but O(n).
+        bytes32[] memory hashes = new bytes32[](caveats.length);
         for (uint256 i = 0; i < caveats.length; i++) {
-            packed = abi.encodePacked(packed, _hashCaveat(caveats[i]));
+            hashes[i] = _hashCaveat(caveats[i]);
         }
-        return keccak256(packed);
+        return keccak256(abi.encodePacked(hashes));
     }
 
     function _hashDelegation(Delegation memory d) private pure returns (bytes32) {
@@ -123,7 +136,8 @@ contract NexusDelegationManager is IDelegationManager, ReentrancyGuard {
                 d.delegator,
                 d.authority,
                 _hashCaveatsArray(d.caveats),
-                d.salt
+                d.salt,
+                d.maxRedemptions
             )
         );
     }
@@ -159,6 +173,12 @@ contract NexusDelegationManager is IDelegationManager, ReentrancyGuard {
         // permissionContext = abi.encode(Delegation). Single-delegation chains only.
         Delegation memory delegation = abi.decode(permissionContext, (Delegation));
 
+        // 0) only root-authority delegations are supported (no delegation chains).
+        //    The TS SDK signs authority = bytes32(0).
+        if (delegation.authority != bytes32(0)) {
+            revert NonRootAuthorityUnsupported(delegation.authority);
+        }
+
         // 1) verify EIP-712 signature recovers the delegator
         bytes32 structHash = _hashDelegation(delegation);
         bytes32 digest = _digest(structHash);
@@ -170,6 +190,14 @@ contract NexusDelegationManager is IDelegationManager, ReentrancyGuard {
         if (delegation.delegate != address(0) && delegation.delegate != redeemer) {
             revert UnauthorizedRedeemer(delegation.delegate, redeemer);
         }
+
+        // 2b) bounded replay guard: a zero cap is unusable; otherwise enforce the
+        //     signed maxRedemptions via a per-delegation counter keyed on structHash.
+        if (delegation.maxRedemptions == 0) revert ZeroMaxRedemptions();
+        if (redemptionsOf[structHash] >= delegation.maxRedemptions) {
+            revert DelegationRedemptionLimitReached(structHash);
+        }
+        redemptionsOf[structHash] += 1;
 
         // 3) run beforeHooks
         uint256 n = delegation.caveats.length;

@@ -27,6 +27,7 @@ export const DELEGATION_TYPES = {
     { name: "authority", type: "bytes32" },
     { name: "caveats", type: "Caveat[]" },
     { name: "salt", type: "uint256" },
+    { name: "maxRedemptions", type: "uint256" },
   ],
 } as const;
 

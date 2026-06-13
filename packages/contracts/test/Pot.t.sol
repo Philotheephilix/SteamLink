@@ -33,6 +33,7 @@ contract PotTest is Test {
 
     function test_OpenDepositSettle_RakeMath() public {
         uint256 roomId = 1;
+        vm.prank(settleAuthority);
         pot.openPot(roomId);
         _deposit(alice, roomId, 5e6);
         _deposit(bob, roomId, 5e6);
@@ -53,6 +54,7 @@ contract PotTest is Test {
 
     function test_Settle_OnlyAuthority() public {
         uint256 roomId = 2;
+        vm.prank(settleAuthority);
         pot.openPot(roomId);
         _deposit(alice, roomId, 5e6);
 
@@ -71,6 +73,7 @@ contract PotTest is Test {
 
     function test_DoubleSettle_Reverts() public {
         uint256 roomId = 4;
+        vm.prank(settleAuthority);
         pot.openPot(roomId);
         _deposit(alice, roomId, 5e6);
 
@@ -80,5 +83,25 @@ contract PotTest is Test {
         vm.prank(settleAuthority);
         vm.expectRevert(abi.encodeWithSelector(Pot.Pot_NotOpen.selector, roomId));
         pot.settle(roomId, alice);
+    }
+
+    // ── M4: openPot is restricted to the settle authority ──
+    function test_OpenPot_OnlySettleAuthority() public {
+        vm.prank(alice);
+        vm.expectRevert(Pot.Pot_NotSettleAuthority.selector);
+        pot.openPot(5);
+    }
+
+    // ── M4: settle rejects a winner who never deposited ──
+    function test_Settle_RejectsNonParticipantWinner() public {
+        uint256 roomId = 6;
+        vm.prank(settleAuthority);
+        pot.openPot(roomId);
+        _deposit(alice, roomId, 5e6);
+
+        // bob never deposited into this room → cannot be the winner
+        vm.prank(settleAuthority);
+        vm.expectRevert(abi.encodeWithSelector(Pot.Pot_WinnerNotParticipant.selector, roomId, bob));
+        pot.settle(roomId, bob);
     }
 }

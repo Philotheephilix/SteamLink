@@ -27,7 +27,7 @@ contract MsgSenderResolutionTest is Test {
     function setUp() public {
         world = new World();
         who = new WhoSystem();
-        world.registerSystem(SYSTEM_ID, address(who), false);
+        world.registerSystem(SYSTEM_ID, address(who));
         // wire the system's trusted router to the World so it honors the appended
         // canonical sender only on the World-routed path
         who.setTrustedRouter(address(world));
