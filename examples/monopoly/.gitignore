@@ -12,3 +12,4 @@ playwright-report
 
 players.local.json
 .e2e-pids.json
+.vercel

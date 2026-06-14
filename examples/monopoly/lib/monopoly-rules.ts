@@ -33,8 +33,16 @@ import {
   isOwnable,
 } from "./board";
 
-export const START_CASH = 80; // small bankroll → real bankruptcies in bounded time
-export const ROUND_CAP = 50; // safety net only; the expected finish is a bankruptcy
+// Bankroll tuned so a real game actually PLAYS OUT (property buys, rent payments, a
+// few tax hits) over many rounds before someone bankrupts — instead of an instant
+// turn-1 bankruptcy when a player lands on the $200 Income Tax. Big enough to survive
+// early big tiles + buy several properties; small enough that accumulating rent +
+// taxes still bankrupts a player within the round budget. Overridable via START_CASH.
+export const START_CASH = Number(process.env.START_CASH ?? 300);
+// Safety-net round cap (richest-player wins if no bankruptcy). Lowered so a slow game
+// still finishes within the e2e budget; the expected finish is still a real bankruptcy.
+// Overridable via ROUND_CAP.
+export const ROUND_CAP = Number(process.env.ROUND_CAP ?? 20);
 
 export interface PlayerState {
   id: string; // address (lowercased) — the on-chain identity

@@ -1,25 +1,8 @@
-/** Playwright globalTeardown — kill the server + bots started in global-setup. */
-import { existsSync, readFileSync, rmSync } from "node:fs";
-import { join } from "node:path";
-
-const PIDS = join(import.meta.dirname, "..", ".e2e-pids.json");
-
+/**
+ * Playwright globalTeardown. The backend + bots run inside the Next dev webServer
+ * (auto-started by instrumentation), which Playwright tears down itself, so there are
+ * no separate processes to kill. Kept as a no-op hook for symmetry.
+ */
 export default async function globalTeardown() {
-  if (!existsSync(PIDS)) return;
-  try {
-    const { pids } = JSON.parse(readFileSync(PIDS, "utf8")) as { pids: number[] };
-    for (const pid of pids) {
-      try {
-        process.kill(-pid, "SIGKILL");
-      } catch {
-        try {
-          process.kill(pid, "SIGKILL");
-        } catch {
-          /* gone */
-        }
-      }
-    }
-  } finally {
-    rmSync(PIDS, { force: true });
-  }
+  /* nothing to clean up — the app's webServer owns the backend + bots */
 }

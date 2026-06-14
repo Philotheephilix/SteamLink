@@ -1,18 +1,23 @@
 /**
  * Full multiplayer e2e for Nexus MONOPOLY against the live Base Sepolia backend.
  *
+ * The game backend + bots now run INSIDE the Next.js app (instrumentation.ts →
+ * lib/auto-start.ts), booted by playwright.config's `next dev` webServer. So this
+ * test does NOT spawn a separate server/bots process — it drives the human seat
+ * through the real UI and reads the WINNER + payout from the SAME-ORIGIN /api/state.
+ *
  * PERSISTENT browser context (chromium.launchPersistentContext) so the guest wallet
  * survives across steps. The whole money path is real and PER-PLAYER:
  *
  *   inject the funded HUMAN key → load app → connect (guest wallet = funded seat 0)
- *   → wait for the bots' game → PAY the buy-in (real USDC x402, settled on-chain,
- *      from the HUMAN's OWN wallet) → play to a WIN via the real UI (human rolls +
- *      buys; bots play via the backend script) → assert the on-chain WINNER + the
- *      pot PAYOUT.
+ *   → wait for the bots' game → PAY the buy-in (real USDC x402, settled on-chain, from
+ *      the HUMAN's OWN wallet) → play to a WIN via the real UI (human rolls + buys;
+ *      bots play via the in-process driver, which also auto-pilots the human seat if
+ *      the browser stalls) → assert the on-chain WINNER + the pot PAYOUT.
  *
- * Verified on-chain via viem: the buy-in tx carries a USDC Transfer(human → Pot) —
- * the logical payer (delegator) is the PLAYER key, not the relayer — and the payout
- * tx carries a USDC Transfer(Pot → winner).
+ * Verified on-chain via viem: the buy-in tx carries a USDC Transfer(human → Pot) — the
+ * logical payer (delegator) is the PLAYER key, not the relayer — and the payout tx
+ * carries a USDC Transfer(Pot → winner).
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -22,13 +27,13 @@ import { createPublicClient, http } from "viem";
 import deployment from "../deployments/base-sepolia.json" assert { type: "json" };
 
 const APP_URL = process.env.MONOPOLY_APP_URL ?? "http://localhost:3030";
-const RPC = "https://sepolia.base.org";
+// publicnode RPC (sepolia.base.org is flaky / rate-limited under the long e2e).
+const RPC = process.env.BASE_SEPOLIA_RPC_URL ?? "https://base-sepolia-rpc.publicnode.com";
 const USDC = deployment.usdc.toLowerCase();
 const POT = deployment.pot.toLowerCase();
 const TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
 const GUEST_KEY_STORAGE = "monopoly.guest.pk";
 const USER_DATA_DIR = join(tmpdir(), "monopoly-playwright-profile");
-const BACKEND_URL = process.env.MONOPOLY_BACKEND_URL ?? "http://localhost:8791";
 
 const pub = createPublicClient({
   chain: { id: 84532, name: "base-sepolia", nativeCurrency: { name: "ETH", symbol: "ETH", decimals: 18 }, rpcUrls: { default: { http: [RPC] } } },
@@ -47,6 +52,28 @@ test.beforeAll(async () => {
   if (!human) throw new Error("no human in players.local.json (run fund-players)");
   humanKey = human.privateKey;
   humanAddress = human.address;
+
+  // The app (webServer) auto-starts the game + bots via instrumentation. Wait for its
+  // /api/state to report a seated game before driving the human (the on-chain seating
+  // can take a while).
+  const deadline = Date.now() + 300_000;
+  let seated = false;
+  while (Date.now() < deadline) {
+    try {
+      const res = await fetch(`${APP_URL}/api/state`);
+      if (res.ok) {
+        const st = (await res.json()) as { ok?: boolean; players?: unknown[] };
+        if (st.ok && Array.isArray(st.players) && st.players.length > 0) {
+          seated = true;
+          break;
+        }
+      }
+    } catch {
+      /* app/game not up yet */
+    }
+    await new Promise((r) => setTimeout(r, 1500));
+  }
+  if (!seated) throw new Error("app did not auto-start a seated game within 300s");
 
   context = await chromium.launchPersistentContext(USER_DATA_DIR, {
     headless: true,
@@ -69,7 +96,6 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-  // Teardown must not throw if the context is already closed.
   try {
     await context?.close(); // flushes the recorded .webm
   } catch {
@@ -91,10 +117,15 @@ test.afterAll(async () => {
   }
 });
 
-/** Read the backend game state directly (the source of truth for winner + payout). */
+/** Read the backend game state directly (the source of truth for winner + payout).
+ *  Uses an AbortController timeout so a slow on-chain read inside /api/state can never
+ *  wedge the drive-loop. */
 async function backendState(): Promise<any> {
   try {
-    const res = await fetch(`${BACKEND_URL}/api/state`);
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 8000);
+    const res = await fetch(`${APP_URL}/api/state`, { signal: ctrl.signal });
+    clearTimeout(t);
     return await res.json();
   } catch {
     return { ok: false };
@@ -130,9 +161,9 @@ test("multiplayer Monopoly: human pays buy-in (on-chain, own wallet) → plays t
   expect(payTxText).toMatch(/^0x[0-9a-fA-F]{64}$/);
   console.log("[e2e] buy-in tx:", payTxText);
 
-  // 3) VERIFY on-chain: that tx carries a USDC Transfer(human → Pot). The `from` of
-  //    the ERC-20 Transfer is the PLAYER (the delegator), proving a distinct player
-  //    wallet signed the budget delegation — the relayer only submitted/redeemed.
+  // 3) VERIFY on-chain: that tx carries a USDC Transfer(human → Pot). The `from` of the
+  //    ERC-20 Transfer is the PLAYER (the delegator), proving a distinct player wallet
+  //    signed the budget delegation — the relayer only submitted/redeemed.
   const payReceipt = await pub.getTransactionReceipt({ hash: payTxText as `0x${string}` });
   expect(payReceipt.status).toBe("success");
   const feeTransfer = payReceipt.logs.find(
@@ -149,43 +180,67 @@ test("multiplayer Monopoly: human pays buy-in (on-chain, own wallet) → plays t
 
   // 4) Play the FULL game to a REAL win (last solvent player after real bankruptcies,
   //    or the documented round-cap richest-player safety net). On the human's turn:
-  //    leave jail → buy affordable properties → end the turn → roll. The bots play
-  //    via the backend script. The WIN GATE is the BACKEND state (source of truth:
-  //    winner + payoutTx), polled each iteration — NOT the flaky DOM banner.
+  //    leave jail → buy affordable properties → end the turn → roll. The bots play via
+  //    the in-process driver, which also auto-pilots the human seat if the browser
+  //    stalls. The WIN GATE is the BACKEND state (source of truth: winner + payoutTx),
+  //    polled each iteration — NOT the flaky DOM banner.
   const winnerBanner = page.getByTestId("winner-banner");
   const rollBtn = page.getByTestId("roll-btn");
   const buyBtn = page.getByTestId("buy-btn");
   const endBtn = page.getByTestId("end-btn");
   const payJailBtn = page.getByTestId("payjail-btn");
 
-  const deadline = Date.now() + 2_400_000;
+  const deadline = Date.now() + 2_100_000; // 35 min — the in-process round cap finishes well inside this
   let backendWinner: string | null = null;
   let backendPayoutTx: string | null = null;
+  let lastLog = 0;
   while (Date.now() < deadline) {
+    // WIN GATE first, every iteration: break as soon as the backend reports a WINNER.
+    // (The payout tx may land a tick later — we poll for it separately just below.)
     const st = await backendState();
-    if (st?.winner && st?.payoutTx) {
+    if (st?.winner) {
       backendWinner = String(st.winner).toLowerCase();
-      backendPayoutTx = String(st.payoutTx);
+      if (st?.payoutTx) backendPayoutTx = String(st.payoutTx);
+      console.log(`[e2e] backend WINNER detected: ${backendWinner} (payout ${backendPayoutTx ?? "pending"})`);
       break;
     }
-    if (await payJailBtn.isVisible().catch(() => false)) {
-      await payJailBtn.click().catch(() => {});
-      await page.waitForTimeout(2200);
-    } else if (await buyBtn.isVisible().catch(() => false)) {
-      await buyBtn.click().catch(() => {});
-      await page.waitForTimeout(2200);
-    } else if (await endBtn.isVisible().catch(() => false)) {
-      await endBtn.click().catch(() => {});
-      await page.waitForTimeout(2000);
-    } else if (await rollBtn.isEnabled().catch(() => false)) {
-      await rollBtn.click().catch(() => {});
-      await page.waitForTimeout(2200);
-    } else {
-      await page.waitForTimeout(1500); // not our turn — wait for the bots to cycle
+    // Periodic progress log so a stuck run is diagnosable.
+    if (Date.now() - lastLog > 30_000) {
+      lastLog = Date.now();
+      const ps = (st?.players ?? []).map((p: any) => `${p.name}:$${p.cash}/${p.properties?.length ?? 0}p${p.bankrupt ? "(bank)" : ""}`).join(" ");
+      console.log(`[e2e] round ${st?.round ?? "?"}/${st?.roundCap ?? "?"} — ${ps}`);
     }
+    // Drive the human seat through the UI (the backend ALSO auto-pilots it if we stall,
+    // so the game finishes regardless of the browser). Every page interaction is raced
+    // against a hard timeout: a frozen/slow headless page (long video recordings can
+    // wedge chromium) must NEVER block the node-side win gate above.
+    const guard = <T,>(p: Promise<T>, ms: number, fallback: T): Promise<T> =>
+      Promise.race([p.catch(() => fallback), new Promise<T>((r) => setTimeout(() => r(fallback), ms))]);
+
+    if (await guard(payJailBtn.isVisible(), 4000, false)) {
+      await guard(payJailBtn.click(), 6000, undefined);
+    } else if (await guard(buyBtn.isVisible(), 4000, false)) {
+      await guard(buyBtn.click(), 6000, undefined);
+    } else if (await guard(endBtn.isVisible(), 4000, false)) {
+      await guard(endBtn.click(), 6000, undefined);
+    } else if (await guard(rollBtn.isEnabled(), 4000, false)) {
+      await guard(rollBtn.click(), 6000, undefined);
+    }
+    // Node-side pace (page-independent) so the loop always advances to the next win check.
+    await new Promise((r) => setTimeout(r, 2000));
   }
 
   expect(backendWinner, "the game should reach a real last-solvent winner (backend winner)").toBeTruthy();
+
+  // The pot payout tx may settle a moment after the winner is decided — poll for it.
+  if (!backendPayoutTx) {
+    const payoutDeadline = Date.now() + 120_000;
+    while (Date.now() < payoutDeadline && !backendPayoutTx) {
+      const st = await backendState();
+      if (st?.payoutTx) backendPayoutTx = String(st.payoutTx);
+      else await new Promise((r) => setTimeout(r, 3000));
+    }
+  }
   expect(backendPayoutTx, "the backend should report a payout tx").toBeTruthy();
   console.log("[e2e] backend winner:", backendWinner, "payout:", backendPayoutTx);
 

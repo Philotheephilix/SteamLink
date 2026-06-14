@@ -30,6 +30,47 @@ function ringCell(id: number): { r: number; c: number } {
 
 const TOKEN_COLORS = ["#22c55e", "#f59e0b", "#ef4444", "#8b5cf6", "#06b6d4", "#ec4899"];
 
+/** Stable per-player token color (by seat order). Exported so the sidebar legend
+ *  can show the same color next to each player's name. */
+export function tokenColorFor(players: { address: string }[], address: string): string {
+  const i = players.findIndex((p) => p.address.toLowerCase() === address.toLowerCase());
+  return TOKEN_COLORS[(i < 0 ? 0 : i) % TOKEN_COLORS.length];
+}
+
+/**
+ * A colored game pawn (chess-pawn silhouette). The fill is the player's identity
+ * color; a white outline + drop shadow keep it legible on any tile. The current
+ * player's own pawn (`me`) is larger, glows, and gently bobs.
+ */
+export function Pawn({
+  color,
+  me = false,
+  size,
+  testId,
+}: {
+  color: string;
+  me?: boolean;
+  size?: number;
+  testId?: string;
+}) {
+  const h = size ?? (me ? 24 : 18);
+  return (
+    <span
+      data-testid={testId}
+      title={me ? "You" : "Opponent"}
+      className={`pawn ${me ? "is-me" : ""}`}
+      style={{ color, width: Math.round(h * 0.72), height: h }}
+    >
+      <svg viewBox="0 0 24 32" aria-hidden="true">
+        <g fill="currentColor" stroke="#ffffff" strokeWidth={me ? 1.7 : 1.4} strokeLinejoin="round">
+          <circle cx="12" cy="7" r="4.9" />
+          <path d="M8 11 q4 2.7 8 0 l-1.9 5 q3.7 2.2 2.7 6.5 l1.7 3.5 H5.5 l1.7-3.5 q-1-4.3 2.7-6.5 z" />
+        </g>
+      </svg>
+    </span>
+  );
+}
+
 export function Board({
   players,
   properties,
@@ -94,15 +135,18 @@ export function Board({
                 <div className="absolute top-0 left-0 px-0.5 text-[6px] font-bold text-white bg-rose-600 rounded-br">M</div>
               )}
               {here.length > 0 && (
-                <div className="absolute inset-0 flex items-end justify-center gap-0.5 pb-0.5 pointer-events-none">
-                  {here.map((p) => (
-                    <span
-                      key={p.address}
-                      data-testid={p.address.toLowerCase() === meAddress?.toLowerCase() ? "player-token" : undefined}
-                      className="w-2 h-2 rounded-full border border-black/40"
-                      style={{ background: colorOf(p.address) }}
-                    />
-                  ))}
+                <div className="absolute inset-x-0 bottom-0 flex items-end justify-center gap-[1px] pb-[1px] pointer-events-none z-20">
+                  {here.map((p) => {
+                    const isMe = p.address.toLowerCase() === meAddress?.toLowerCase();
+                    return (
+                      <Pawn
+                        key={p.address}
+                        color={colorOf(p.address)}
+                        me={isMe}
+                        testId={isMe ? "player-token" : undefined}
+                      />
+                    );
+                  })}
                 </div>
               )}
             </div>

@@ -3,12 +3,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { LocalAccount } from "viem/accounts";
 import { getGuestAccount, PRIVY_ENABLED } from "./wallet";
-import { Board } from "./components/Board";
+import { Board, Pawn, tokenColorFor } from "./components/Board";
 import { Dice } from "./components/Dice";
 import { MonopolyClient, type GameView } from "@/lib/monopoly-client";
 import { BOARD } from "@/lib/board";
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_MONOPOLY_BACKEND_URL ?? "http://localhost:8791";
+// Empty → same-origin /api/* (the backend now lives in this Next app). Only set
+// NEXT_PUBLIC_MONOPOLY_BACKEND_URL to talk to a separate origin.
+const BACKEND_URL = process.env.NEXT_PUBLIC_MONOPOLY_BACKEND_URL ?? "";
 
 type Phase = "connect" | "waiting" | "lobby" | "playing" | "done";
 
@@ -221,7 +223,9 @@ export default function Page() {
                       return (
                         <li key={p.address} className={`flex items-center justify-between text-xs rounded-lg px-2 py-1.5 ${p.bankrupt ? "opacity-40 line-through" : ""} ${isCur ? "bg-emerald-500/15 ring-1 ring-emerald-400/40" : "bg-black/20"}`}>
                           <span className="flex items-center gap-2">
+                            <Pawn color={tokenColorFor(view.players, p.address)} size={18} />
                             <span className="font-semibold">{p.name}</span>
+                            {isCur && <span className="text-[9px] text-emerald-300">●</span>}
                             {p.inJail && <span className="text-[9px] text-rose-300">JAIL</span>}
                           </span>
                           <span className="flex items-center gap-3">
