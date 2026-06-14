@@ -26,6 +26,9 @@ export default {
         grass: "oklch(0.71 0.15 150 / <alpha-value>)",
         amber: "oklch(0.82 0.15 78 / <alpha-value>)",
         berry: "oklch(0.62 0.2 8 / <alpha-value>)",
+        // merged game palettes
+        felt: "#0d2818",
+        uno: { red: "#e4002b", green: "#3aa935", blue: "#0073cf", yellow: "#ffcc00" },
       },
       boxShadow: {
         sticker: "4px 4px 0 0 oklch(0.245 0.03 55)",

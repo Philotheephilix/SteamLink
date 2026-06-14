@@ -47,7 +47,7 @@ export const GAMES: GameEntry[] = [
     tagline: "The full 108-card deck, dealt onchain.",
     description:
       "The official UNO ruleset, settled on Base. The shuffle is seeded by real onchain randomness, hands stay sealed until they're yours, and the 1 USDC entry is a real x402 payment. Empty your hand, win the pot.",
-    status: "coming-soon",
+    status: "live",
     players: "2–4",
     tags: ["Cards", "Sealed hands", "x402 entry"],
     accent: "coral",
@@ -59,7 +59,7 @@ export const GAMES: GameEntry[] = [
     tagline: "Full US ruleset, played to a real bankruptcy.",
     description:
       "The complete standard Monopoly board on Base. Every debit, buy, rent, tax, house, fine, is a real USDC charge bounded onchain by your spend caps. The last player solvent takes the pot. No fake win.",
-    status: "coming-soon",
+    status: "live",
     players: "2–4",
     tags: ["Board", "Real USDC", "Spend caps"],
     accent: "grape",

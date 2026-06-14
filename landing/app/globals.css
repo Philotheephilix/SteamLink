@@ -233,3 +233,194 @@ h3 {
 ::selection {
   background: oklch(0.66 0.2 30 / 0.25);
 }
+
+/* ===================== MERGED GAME STYLES ===================== */
+
+/* === merged game surfaces (applied via app/play/<game>/layout.tsx) === */
+.uno-surface {
+  background: radial-gradient(120% 80% at 50% -10%, #14361f 0%, #0a1a10 45%, #060d08 100%);
+  color: #e9efe9;
+  font-family: var(--font-display);
+}
+.monopoly-surface {
+  background:
+    radial-gradient(1200px 700px at 50% -10%, #134e45 0%, transparent 60%),
+    radial-gradient(900px 600px at 110% 110%, #0c3b34 0%, transparent 55%),
+    linear-gradient(160deg, #061a17 0%, #03100e 100%);
+  color: #e7f6f2;
+}
+
+/* --- UNO --- */
+
+:root {
+  --font-display: "Space Grotesk", "Inter", ui-sans-serif, system-ui;
+}
+
+/* Felt texture overlay — subtle, distinctive table grain. */
+.felt-grain::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.05;
+  background-image: radial-gradient(rgba(255, 255, 255, 0.6) 0.5px, transparent 0.5px);
+  background-size: 4px 4px;
+}
+
+.card-face {
+  transform-style: preserve-3d;
+  transition: transform 160ms cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 160ms;
+}
+.card-face:hover {
+  transform: translateY(-14px) rotate(-1deg);
+  box-shadow: 0 24px 40px -12px rgba(0, 0, 0, 0.65);
+}
+
+@keyframes pulse-ring {
+  0% { box-shadow: 0 0 0 0 rgba(255, 204, 0, 0.5); }
+  70% { box-shadow: 0 0 0 16px rgba(255, 204, 0, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(255, 204, 0, 0); }
+}
+.turn-active {
+  animation: pulse-ring 2s infinite;
+}
+
+.ledger {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* --- MONOPOLY --- */
+
+:root {
+  --font-display: "Space Grotesk", ui-monospace, monospace;
+  --felt-1: #0c3b34;
+  --felt-2: #07241f;
+  --gold: #f5d76e;
+  --neon: #5eead4;
+}
+
+/* felt fabric texture */
+.felt {
+  background-color: var(--felt-1);
+  background-image:
+    radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0.03) 0.5px, transparent 0.6px),
+    radial-gradient(circle at 0 0, rgba(0, 0, 0, 0.25) 0.5px, transparent 0.6px);
+  background-size: 4px 4px, 4px 4px;
+  box-shadow:
+    inset 0 0 0 2px rgba(245, 215, 110, 0.25),
+    inset 0 0 60px rgba(0, 0, 0, 0.6),
+    0 30px 80px rgba(0, 0, 0, 0.6);
+}
+
+.tile {
+  background: linear-gradient(180deg, #f6f3e8 0%, #e9e3cf 100%);
+  color: #11201d;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6), 0 2px 6px rgba(0, 0, 0, 0.45);
+  border: 1px solid rgba(0, 0, 0, 0.25);
+}
+
+.tile.active {
+  outline: 3px solid var(--neon);
+  outline-offset: -2px;
+  box-shadow: 0 0 0 2px var(--neon), 0 0 28px rgba(94, 234, 212, 0.6);
+}
+
+.tile.owned {
+  background: linear-gradient(180deg, #fff7e6 0%, #ffe9bd 100%);
+}
+
+/* Player pawns on the board. Color = player identity; white outline + shadow
+   keep them legible on any tile, and the active player's pawn bobs + glows. */
+.pawn {
+  display: inline-block;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.6));
+}
+.pawn svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.pawn.is-me {
+  filter: drop-shadow(0 0 2px rgba(255, 255, 255, 0.95)) drop-shadow(0 1px 1px rgba(0, 0, 0, 0.7));
+  animation: pawn-bob 1.5s ease-in-out infinite;
+}
+@keyframes pawn-bob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-2.5px); }
+}
+
+.gold-text {
+  color: var(--gold);
+  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.4);
+}
+
+.die {
+  background: linear-gradient(180deg, #ffffff 0%, #e7e7e7 100%);
+  color: #0b1220;
+  box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.9), 0 6px 0 #b8b8b8, 0 10px 18px rgba(0, 0, 0, 0.5);
+}
+
+.btn {
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  border-radius: 0.75rem;
+  transition: transform 0.08s ease, filter 0.15s ease;
+}
+.btn:active {
+  transform: translateY(2px);
+}
+.btn-primary {
+  background: linear-gradient(180deg, #5eead4 0%, #2dd4bf 100%);
+  color: #062b26;
+  box-shadow: 0 5px 0 #119a8a, 0 10px 22px rgba(45, 212, 191, 0.35);
+}
+.btn-primary:hover {
+  filter: brightness(1.06);
+}
+.btn-gold {
+  background: linear-gradient(180deg, #f5d76e 0%, #e3b53d 100%);
+  color: #2a1d05;
+  box-shadow: 0 5px 0 #a87f1c, 0 10px 22px rgba(227, 181, 61, 0.35);
+}
+.btn-danger {
+  background: linear-gradient(180deg, #fb7185 0%, #e11d48 100%);
+  color: #fff;
+  box-shadow: 0 5px 0 #9f1239;
+}
+.btn-ghost {
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(209, 250, 229, 0.85);
+  box-shadow: inset 0 0 0 1px rgba(110, 231, 183, 0.25);
+}
+.btn-ghost:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+.btn:disabled {
+  opacity: 0.45;
+  filter: grayscale(0.4);
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.token {
+  background: radial-gradient(circle at 35% 30%, #fff 0%, #5eead4 35%, #0f766e 100%);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.5), inset 0 1px 2px rgba(255, 255, 255, 0.8);
+}
+
+.panel {
+  background: linear-gradient(180deg, rgba(8, 36, 31, 0.92) 0%, rgba(4, 18, 16, 0.92) 100%);
+  border: 1px solid rgba(245, 215, 110, 0.18);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  backdrop-filter: blur(8px);
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, monospace;
+}
+
+a.tx-link {
+  color: var(--neon);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
