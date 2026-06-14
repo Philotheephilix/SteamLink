@@ -28,6 +28,8 @@ export class UnoClient {
     private readonly baseUrl: string,
     private readonly account: LocalAccount,
   ) {}
+  // baseUrl defaults to "" (same-origin) from the caller — the backend now lives
+  // in this Next.js app under /api/*.
 
   get address(): Address {
     return this.account.address;

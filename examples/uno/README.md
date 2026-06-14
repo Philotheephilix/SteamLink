@@ -9,8 +9,9 @@ every player is a distinct, self-custodial key.
   number / symbol matching; all action-card effects (Skip; Reverse — acts as Skip in
   2-player; Draw Two; Wild; Wild Draw Four); draw-when-stuck; discard reshuffle when
   the draw pile empties; and a **real win** (a player legally plays their last card).
-  The backend (`scripts/server.ts` + `lib/uno-game.ts`) is the authoritative
+  The backend (`lib/game-backend.ts` + `lib/uno-game.ts`) is the authoritative
   full-rules engine and **rejects illegal plays**. No all-wild / fast-win shortcut.
+  The backend + bots now run **inside the Next.js app** — `pnpm dev` boots everything.
 - **On-chain shuffle.** The deck order is seeded by a real on-chain random word from
   the `RandomnessCoordinator` (fast/prevrandao tier) — no `Math.random` in the deal.
 - **Sealed hands.** Each hand is sealed with `@nexus/secrets` (`LocalSecrets`, real
@@ -42,11 +43,13 @@ and `scripts/live/e2e.ts` (each player signs; the relayer redeems `redeemDelegat
 | Deploy (full Nexus stack + Randomness + UNO + Pot, real USDC) | `contracts/DeployUno.s.sol`, `scripts/deploy.sh` |
 | Redemption engine (relayer redeems per-player delegations; on-chain shuffle word) | `lib/engine.ts` |
 | Browser-safe per-player delegation signing | `lib/delegations.ts` |
-| Authoritative game server (full rules, sealed hands, settles pot) | `scripts/server.ts` |
+| Authoritative game backend singleton (full rules, sealed hands, settles pot) — server-only | `lib/game-backend.ts` |
+| Next.js Route Handlers (same-origin `/api/*`) | `app/api/{state,new-game,charge,hand,move,health}/route.ts` |
+| Auto-start (funds players → creates game → launches bots) via instrumentation | `instrumentation.ts`, `lib/auto-start.ts` |
+| In-process bot runner (signs, pays x402, plays legal moves to a win) | `lib/bot-runner.ts` |
 | Real UNO bot strategy | `lib/bot-strategy.ts` |
-| Bot driver (joins, pays x402, plays legal moves to a win) | `scripts/bots.ts` |
-| Headless full-game smoke (every seat via the SDK, prints tx hashes) | `scripts/smoke.ts` |
-| Fund + approve player keys (sequential nonces) | `scripts/fund-players.ts` |
+| Reusable fund/approve player keys (sequential nonces) — used by auto-start + CLI | `lib/ensure-players.ts`, `scripts/fund-players.ts` |
+| Standalone debug server / bots / smoke (no longer required to run the app) | `scripts/server.ts`, `scripts/bots.ts`, `scripts/smoke.ts` |
 | Browser client (human signs, fetches sealed hand, server redeems) | `lib/uno-client.ts`, `app/`, `components/` |
 | Playwright e2e (persistent browser, on-chain verified) | `tests/uno.spec.ts`, `tests/global-setup.ts` |
 
@@ -69,45 +72,60 @@ pnpm install
 export PATH="$HOME/.foundry/bin:$PATH"
 pnpm --filter @nexus/example-uno deploy
 
-# 2. fund + approve the player keys (1 human + N bots), SEQUENTIALLY.
-#    Writes examples/uno/players.local.json (PRIVATE KEYS — gitignored).
-#    Idempotent: re-running tops up wallets below the threshold (reuses keys).
-#    FRESH=1 forces brand-new keys. BOT_COUNT=2 by default.
-pnpm --filter @nexus/example-uno fund-players
-
-# 3. start the game server (relayer redeems; serializes nonces) on :8790 — keep running
-pnpm --filter @nexus/example-uno server
-
-# 4. start the bots (they create the game, pay x402, and play to a win) — new terminal
-pnpm --filter @nexus/example-uno bots
-
-# 5. start the Next.js app on :3100 — new terminal
+# 2. JUST RUN THE APP — one command boots everything.
+#    `pnpm dev` (Next.js) auto-starts the whole game via instrumentation.ts:
+#      - funds + approves the player keys (1 human + N bots) if needed
+#        (writes examples/uno/players.local.json — PRIVATE KEYS, gitignored;
+#         idempotent: tops up wallets below threshold, reuses keys; FRESH=1 forces
+#         new keys; BOT_COUNT=2 by default),
+#      - draws the on-chain shuffle word, deals + seals hands, seats the room,
+#      - launches the in-process bot runner.
+#    The human just opens http://localhost:3100 and plays — no separate processes.
 pnpm --filter @nexus/example-uno dev
 
-# 6. production build (must succeed)
+# (the same auto-start happens under `next start` after a build)
+pnpm --filter @nexus/example-uno start
+
+# 3. production build (must succeed; does NOT touch the chain — auto-start only
+#    runs at RUNTIME via instrumentation's register()).
 pnpm --filter @nexus/example-uno build
 
-# 7. Playwright e2e — REAL payments, gasless moves, a game to a WIN, pot payout,
-#    all verified ON-CHAIN. globalSetup auto-starts (and funds) the server + bots;
-#    the config's webServer auto-starts the Next app.
+# 4. Playwright e2e — REAL payments, gasless moves, a game to a WIN, pot payout,
+#    all verified ON-CHAIN. globalSetup just funds the players; the config's
+#    webServer (`next dev`) auto-starts the game + bots; the spec waits for the
+#    seated game, then drives the human through pay + play.
 pnpm --filter @nexus/example-uno test:e2e
 ```
 
-A headless full game to a real win (no browser) — every seat driven through the
-SDK; prints the winning move sequence + every tx hash. Run alongside the server
-(step 3):
+### Optional / debug
+
+If you want the old split processes (e.g. to debug the backend in isolation), the
+standalone Hono server + bot driver are still here — but they are **no longer
+required** for the app to run:
 
 ```bash
+# fund keys manually (auto-start does this for you)
+pnpm --filter @nexus/example-uno fund-players
+# standalone Hono backend on :8790 (point the app at it via NEXT_PUBLIC_UNO_BACKEND_URL)
+pnpm --filter @nexus/example-uno server
+# standalone bot driver (HTTP) against that server
+pnpm --filter @nexus/example-uno bots
+# headless full-game smoke (every seat via the SDK, prints tx hashes), needs the server
 pnpm --filter @nexus/example-uno smoke
 ```
 
 ## How the flow works
 
-1. **Fund** — `fund-players.ts` generates a key per player, sends a small ETH +
-   USDC top-up from the relayer (sequential receipts → no nonce collisions), and
+0. **Auto-start** — on app boot, `instrumentation.ts` → `lib/auto-start.ts`
+   (Node runtime only) ensures players are funded, creates the game, and launches
+   the in-process bot runner. A module-level guard makes it idempotent across
+   Next's dev double-invoke. The browser talks to the **same origin** `/api/*`.
+1. **Fund** — `lib/ensure-players.ts` generates a key per player, sends a small ETH
+   + USDC top-up from the relayer (sequential receipts → no nonce collisions), and
    each player sends its OWN `approve(manager)` so the relayer can redeem its
    budget delegation's `transferFrom`.
-2. **New game** — the bot driver calls `POST /api/new-game`; the server draws a real
+2. **New game** — auto-start calls `ensureGame()` (the logic behind `POST
+   /api/new-game`); the backend draws a real
    on-chain random word from the `RandomnessCoordinator`, builds + shuffles the full
    108-card deck from it, deals 7 to each seat, **seals every hand** (AES-GCM), seats
    the room on the `TurnManager` (human seat 0, then bots), seeds the discard top on
@@ -127,7 +145,7 @@ pnpm --filter @nexus/example-uno smoke
    (`USDC.transferFrom(Pot → winner)`, minus rake = 0).
 
 The human plays in a real browser (persistent guest wallet); the bots play from
-`scripts/bots.ts`. Entry fee is **0.1 USDC** (small for testnet so each ~0.5 USDC
+`lib/bot-runner.ts` in-process. Entry fee is **0.1 USDC** (small for testnet so each ~0.5 USDC
 player wallet can buy in repeatedly); override with `ENTRY_FEE_USDC`.
 
 ## Security

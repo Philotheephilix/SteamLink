@@ -8,7 +8,10 @@ import { getGuestAccount, privyEnabled } from "../lib/signer";
 import { POT_ADDRESS } from "../lib/deployment";
 import type { LocalAccount } from "viem/accounts";
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_UNO_BACKEND_URL ?? "http://localhost:8790";
+// Same-origin by default: the game backend now runs inside this Next.js app
+// (app/api/*), so fetch("/api/state") hits it directly. Override only for a
+// standalone server via NEXT_PUBLIC_UNO_BACKEND_URL.
+const BACKEND_URL = process.env.NEXT_PUBLIC_UNO_BACKEND_URL ?? "";
 
 type Phase = "connect" | "waiting" | "lobby" | "paying" | "playing" | "done";
 
@@ -267,7 +270,7 @@ export default function Home() {
             <div className="flex min-h-[420px] flex-col items-center justify-center gap-4 text-center">
               <div className="h-10 w-10 animate-spin rounded-full border-4 border-uno-yellow border-t-transparent" />
               <p className="text-white/70" data-testid="waiting">
-                Waiting for a table… (start the bots: <code className="ledger text-uno-yellow">pnpm bots</code>)
+                Waiting for a table… (the game auto-starts with the app)
               </p>
             </div>
           )}

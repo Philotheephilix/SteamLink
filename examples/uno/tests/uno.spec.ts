@@ -48,6 +48,28 @@ test.beforeAll(async () => {
   humanKey = human.privateKey;
   humanAddress = human.address;
 
+  // The app (webServer) auto-starts the game + bots via instrumentation. Wait for
+  // its /api/state to report a seated game before driving the human through the UI
+  // (a fresh on-chain shuffle can take a while).
+  const deadline = Date.now() + 300_000;
+  let seated = false;
+  while (Date.now() < deadline) {
+    try {
+      const res = await fetch(`${APP_URL}/api/state`);
+      if (res.ok) {
+        const st = (await res.json()) as { ok?: boolean; seats?: unknown[] };
+        if (st.ok && Array.isArray(st.seats) && st.seats.length > 0) {
+          seated = true;
+          break;
+        }
+      }
+    } catch {
+      /* app/game not up yet */
+    }
+    await new Promise((r) => setTimeout(r, 1500));
+  }
+  if (!seated) throw new Error("app did not auto-start a seated game within 300s");
+
   context = await chromium.launchPersistentContext(USER_DATA_DIR, {
     headless: true,
     viewport: { width: 1280, height: 900 },
