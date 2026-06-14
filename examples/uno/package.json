@@ -12,7 +12,8 @@
     "build": "next build",
     "start": "next start -p 3100",
     "test:e2e": "playwright test",
-    "test:e2e:headed": "playwright test --headed"
+    "test:e2e:headed": "playwright test --headed",
+    "demo": "tsx scripts/record-demo.ts"
   },
   "dependencies": {
     "@nexus/backend": "workspace:*",
