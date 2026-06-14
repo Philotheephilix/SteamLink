@@ -1,3 +1,13 @@
+/**
+ * `createMonetizeHandler` — the framework-agnostic x402 monetization middleware
+ * (design §7.3). It gates a route: when a request arrives without a valid payment
+ * it returns a 402 `Challenge402`; when it carries an `x-payment` redemption it
+ * verifies it through the configured {@link FacilitatorAdapter} (default the
+ * delegation-aware facilitator) and either passes the request through or rejects
+ * it as a typed {@link NexusError}. `statusForError` maps those codes to HTTP
+ * status (402 PAYMENT_REQUIRED / 403 / 500). The Express and Hono adapters
+ * (./adapters) wrap this single handler.
+ */
 import { type Hex, NexusError, type TokenSymbol } from "@nexus/types";
 import type {
   Challenge402,

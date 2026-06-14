@@ -1,3 +1,11 @@
+/**
+ * `NexusProvider` — the root React context provider for the @nexus/react surface.
+ * It owns one {@link SubscriptionManager} per provider instance (the transport
+ * seam to the gateway's WS/state feed) and exposes config + subscriptions to every
+ * child hook (`useTable`, `useTurn`, `useGameActions`, `useCharge`, `usePot`, …).
+ * The manager is created lazily and disposed on unmount. This is the binding point
+ * between the on-chain-truth feed and the optimistic-UI store.
+ */
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { SubscriptionManager } from "./SubscriptionManager.js";
 import { type NexusClientConfig, NexusContext, type NexusContextValue } from "./context.js";

@@ -1,3 +1,12 @@
+/**
+ * POST /api/move — the gasless-move endpoint for UNO. The browser/bot POSTs the
+ * player's pre-signed gameplay `SignedDelegation` plus the intended play; this
+ * route forwards to `move()` in lib/game-backend.ts, which validates the play
+ * against the full-rules engine and redeems the delegation through the
+ * NexusDelegationManager (turn-bound, gasless for the player). Returns 200 on
+ * success, 409 on a rule rejection (client retries), 500 on server error. No
+ * wallet popup is involved — the single join-time delegation covers every move.
+ */
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 

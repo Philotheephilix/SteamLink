@@ -1,3 +1,11 @@
+/**
+ * Solidity codegen — turns a deploy manifest (built from `defineGame`) into the
+ * `<Game>Tables` Solidity library: a struct mirroring each table's schema plus
+ * the `bytes32` table/system id constants. The output is written by the CLI
+ * (`nexus codegen`) and compiled by Foundry, so the on-chain World and the TS
+ * client share one schema — the typed-end-to-end guarantee. Consumed by
+ * packages/cli/src/lib/codegen.ts.
+ */
 import type { DeployManifest } from "./manifest.js";
 
 const SOLIDITY_IDENT = /^[A-Za-z_]\w*$/;

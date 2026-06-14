@@ -1,3 +1,17 @@
+/**
+ * The Nexus delegation engine — the client-side core of the "one signature →
+ * gasless everything" model. It (a) compiles a game's `delegation` config into
+ * the two on-chain caveat groups (`buildGameplayCaveats` / `buildBudgetCaveats`),
+ * (b) signs the single EIP-712 `GameDelegation` a player grants at joinRoom
+ * (`signDelegation`, schema from ./eip712.ts, verified byte-for-byte against the
+ * deployed NexusDelegationManager), and (c) packs the ERC-7579 executions and
+ * `redeemDelegations` calldata (`buildMoveExecution`, `buildChargeExecution`,
+ * `buildRedeemCalldata`) the relayer broadcasts on-chain.
+ *
+ * Position in the flow: the browser/bot calls `signDelegation` once; the backend
+ * move/charge lifecycles call the `build*Execution`/`buildRedeemCalldata` helpers
+ * to construct the bundle the RelayerAdapter submits to NexusDelegationManager.
+ */
 import type { Address, Hex } from "@nexus/types";
 import {
   type LocalAccount,

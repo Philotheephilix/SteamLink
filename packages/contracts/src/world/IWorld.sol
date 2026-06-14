@@ -1,6 +1,15 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.23;
 
+/**
+ * @title IWorld / store events
+ * @notice The external surface of the Nexus `World` (the ECS root): table/system
+ *         registration, the `call` router, access-controlled record read/write,
+ *         and the trusted-forwarder wiring for ERC-7710 redemption. Systems,
+ *         enforcers, and the off-chain indexer consume this interface; the indexer
+ *         projects state by subscribing to exactly the `Store_*` events below.
+ */
+
 /// @notice Canonical store event set — the indexer (Phase 06) subscribes to exactly these.
 interface IStoreEvents {
     event Store_SetRecord(bytes32 indexed tableId, bytes32[] keyTuple, bytes staticData, bytes dynamicData);

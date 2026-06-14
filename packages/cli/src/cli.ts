@@ -1,4 +1,11 @@
 #!/usr/bin/env node
+/**
+ * `nexus` CLI entry point — the developer's command surface over the SDK. Wires
+ * the Commander program to the subcommands in ./commands: `init` (scaffold a
+ * project), `codegen` (emit Solidity tables + TS types from `defineGame`),
+ * `deploy` (deploy the World/systems to Base via Foundry), `dev` (local devnet),
+ * `migrate` (register/upgrade systems), and `fork` (fork a chain for testing).
+ */
 import { Command } from "commander";
 import { codegenCommand } from "./commands/codegen.js";
 import { deployCommand } from "./commands/deploy.js";

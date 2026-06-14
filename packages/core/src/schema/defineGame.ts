@@ -1,3 +1,12 @@
+/**
+ * `defineGame` — the single source of truth for a Nexus game. A developer
+ * describes the game as data (ECS `tables`), logic (`systems`, Solidity sources),
+ * and monetization (`economy`); everything else is derived from this object.
+ * The codegen (../codegen) emits the Solidity table library and the TS client
+ * types from it, and the React hooks bind to the same table names — so a
+ * misspelled table fails at compile time. Validation here is eager (throws on an
+ * invalid definition at load), making it the first gate in the build pipeline.
+ */
 import type { TableSchema } from "./types.js";
 
 /** Economy config for a game (entry fee + pot rules). */
