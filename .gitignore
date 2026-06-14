@@ -45,3 +45,8 @@ examples/**/out/
 examples/**/cache/
 examples/**/broadcast/
 examples/**/.last-run.json
+
+# game demo videos — never commit (large, regenerated)
+examples/**/demos/
+**/*.webm
+**/*.mp4
