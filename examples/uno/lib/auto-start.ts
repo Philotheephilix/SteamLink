@@ -15,11 +15,33 @@
  *
  * NEVER import from a client component.
  */
+import type { Address } from "@nexus/types";
 import { ensurePlayers, readPlayers, type PlayerKey } from "./ensure-players";
 import { ensureGame, getState } from "./game-backend";
 import { runBots } from "./bot-runner";
 
 let started = false;
+
+/**
+ * Start a FRESH game seated with a REAL connected player (their wallet address) as
+ * seat 0, plus the server-side bots, and launch the bot loop. This is what powers
+ * the browser "Start game" button: a MetaMask/guest player whose address is not the
+ * demo's auto-seeded human gets their own seat. Re-seating (force) replaces any
+ * existing game; the previous bot loop stops itself when the room changes.
+ */
+export async function startGameForHuman(
+  human: Address,
+): Promise<{ ok: boolean; error?: string } & Record<string, unknown>> {
+  const players = await ensurePlayerKeys();
+  const bots = players.filter((p) => p.role === "bot");
+  if (bots.length === 0) return { ok: false, error: "no bots configured" };
+  const game = await ensureGame(human, bots.map((b) => b.address), undefined, true);
+  if (!game.ok) return game;
+  const roomId = String((game as { roomId?: string }).roomId ?? (getState() as { roomId?: string }).roomId);
+  console.log(`[start] seated player ${human} in room ${roomId}; launching ${bots.length} bot(s)`);
+  void runBots(bots, roomId).catch((err) => console.error("[start] bot-runner crashed:", err instanceof Error ? err.message : err));
+  return game;
+}
 
 async function ensurePlayerKeys(): Promise<PlayerKey[]> {
   // Prefer funding (idempotent — only tops up below threshold). If funding fails

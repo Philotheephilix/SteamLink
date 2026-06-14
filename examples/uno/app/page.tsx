@@ -4,9 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Card, colorName } from "../components/Card";
 import { UnoClient, type GameView } from "../lib/uno-client";
 import { type UnoCard, type TopState, isWildCard } from "../lib/uno-rules";
-import { getGuestAccount, privyEnabled } from "../lib/signer";
+import { connectMetaMask, connectGuest, clearGuest, hasInjectedWallet, type Connection } from "../lib/signer";
 import { POT_ADDRESS } from "../lib/deployment";
-import type { LocalAccount } from "viem/accounts";
 
 // Same-origin by default: the game backend now runs inside this Next.js app
 // (app/api/*), so fetch("/api/state") hits it directly. Override only for a
@@ -20,8 +19,11 @@ function short(a?: string | null) {
 }
 
 export default function Home() {
-  const [account, setAccount] = useState<LocalAccount | null>(null);
+  const [conn, setConn] = useState<Connection | null>(null);
+  const account = conn?.account ?? null;
   const [phase, setPhase] = useState<Phase>("connect");
+  const [copied, setCopied] = useState(false);
+  const [starting, setStarting] = useState(false);
   const [view, setView] = useState<GameView | null>(null);
   const [hand, setHand] = useState<UnoCard[]>([]);
   const [legal, setLegal] = useState<number[]>([]);
@@ -46,13 +48,66 @@ export default function Home() {
     return c;
   }, [account]);
 
+  const connectWith = useCallback(
+    async (mode: "metamask" | "guest") => {
+      setError(null);
+      try {
+        const c = mode === "metamask" ? await connectMetaMask() : connectGuest();
+        setConn(c);
+        setPhase("waiting");
+        addLog(`connected ${c.kind === "metamask" ? "MetaMask Smart Account" : "guest wallet"} ${short(c.account.address)}`);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      }
+    },
+    [addLog],
+  );
+  // Default Connect: MetaMask if an injected wallet is present, else a guest wallet
+  // (keeps the headless e2e — which has no injected wallet — working unchanged).
   const connect = useCallback(() => {
+    void connectWith(hasInjectedWallet() ? "metamask" : "guest");
+  }, [connectWith]);
+
+  const disconnect = useCallback(() => {
+    if (conn?.kind === "guest") clearGuest();
+    setConn(null);
+    setView(null);
+    setPhase("connect");
+    paidRef.current = false;
+    setPaymentTx(null);
+    setHand([]);
+    setLegal([]);
+    addLog("disconnected");
+  }, [conn, addLog]);
+
+  const copyAddr = useCallback(async () => {
+    if (!account) return;
+    try {
+      await navigator.clipboard.writeText(account.address);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
+    } catch {
+      /* clipboard blocked */
+    }
+  }, [account]);
+
+  // Start a fresh game seated with THIS wallet (used when the connected address
+  // isn't already seated in the auto-started demo game).
+  const startGame = useCallback(async () => {
+    if (!client || starting) return;
+    setStarting(true);
     setError(null);
-    const a = getGuestAccount();
-    setAccount(a);
-    setPhase("waiting");
-    addLog(`connected as guest wallet ${short(a.address)}`);
-  }, [addLog]);
+    try {
+      addLog("starting a game with your wallet…");
+      const res = await client.start();
+      if (!res.ok) throw new Error(res.error ?? "could not start a game");
+      addLog(`game ${res.roomId ?? ""} started — you're seated`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setStarting(false);
+    }
+  }, [client, starting, addLog]);
 
   const board: TopState = view ? view.board : { topColor: 1, topValue: 5, activeColor: 1 };
 
@@ -126,6 +181,13 @@ export default function Home() {
     setError(null);
     setPhase("paying");
     try {
+      // Player brings their own USDC: make sure the delegation manager is approved
+      // to pull the entry fee (one `approve` — MetaMask popup, or silent for guest).
+      const feeWei = BigInt(Math.round(Number(view.fee) * 1e6));
+      if (conn) {
+        addLog("checking USDC allowance (approve if needed)…");
+        await conn.ensureApproval(feeWei);
+      }
       addLog(`signing budget delegation + paying ${view.fee} USDC entry fee (x402)…`);
       const res = await client.pay(POT_ADDRESS, view.fee);
       if (!res.ok || !res.txHash) throw new Error(res.error ?? "charge failed");
@@ -140,7 +202,7 @@ export default function Home() {
     } finally {
       setBusy(false);
     }
-  }, [client, view, addLog]);
+  }, [client, view, conn, addLog]);
 
   const submitPlay = useCallback(
     async (card: UnoCard, chosenColor: number) => {
@@ -240,10 +302,37 @@ export default function Home() {
             Full official ruleset · 108-card deck · gasless moves · x402 entry · sealed hands · on-chain shuffle · Base Sepolia
           </p>
         </div>
-        <div className="text-right text-xs text-white/50 ledger">
-          <div>wallet {short(account?.address)}</div>
-          <div>{privyEnabled() ? "privy" : "guest"} mode</div>
-        </div>
+        {account ? (
+          <div className="flex items-center gap-2">
+            <span
+              className="rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
+              style={{ background: conn?.kind === "metamask" ? "#f6851b22" : "#ffffff14", color: conn?.kind === "metamask" ? "#f6851b" : "#ffffffaa" }}
+            >
+              {conn?.kind === "metamask" ? "Smart Account" : "Guest"}
+            </span>
+            <button
+              type="button"
+              onClick={copyAddr}
+              data-testid="wallet-address"
+              title="Copy address"
+              className="flex items-center gap-1.5 rounded-full bg-white/10 px-3 py-1.5 text-xs font-medium text-white/80 transition hover:bg-white/15"
+            >
+              <span className="ledger">{short(account.address)}</span>
+              <span className="text-white/40">{copied ? "✓ copied" : "⧉"}</span>
+            </button>
+            <button
+              type="button"
+              onClick={disconnect}
+              data-testid="disconnect"
+              title="Disconnect"
+              className="rounded-full bg-white/5 px-3 py-1.5 text-xs font-medium text-white/50 transition hover:bg-rose-500/20 hover:text-rose-200"
+            >
+              Disconnect
+            </button>
+          </div>
+        ) : (
+          <div className="text-right text-xs text-white/40 ledger">not connected</div>
+        )}
       </header>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_320px]">
@@ -253,25 +342,46 @@ export default function Home() {
               <div className="text-6xl">🃏</div>
               <h2 className="text-2xl font-semibold">Sit down at the table</h2>
               <p className="max-w-md text-white/60">
-                Connect a self-custodial <b>guest wallet</b> to join a real game of UNO against the bots.
+                Connect <b>MetaMask</b> to join a real game of UNO against the bots — you sign one
+                delegation, then every move is gasless. Bring a little Base-Sepolia USDC for the entry fee.
               </p>
               <button
                 type="button"
                 data-testid="connect"
                 onClick={connect}
-                className="rounded-full bg-uno-yellow px-8 py-3 font-bold text-black transition hover:brightness-110"
+                className="flex items-center gap-2 rounded-full bg-[#f6851b] px-8 py-3 font-bold text-black transition hover:brightness-110"
               >
-                Connect wallet
+                🦊 Connect MetaMask
+              </button>
+              <button
+                type="button"
+                data-testid="connect-guest"
+                onClick={() => void connectWith("guest")}
+                className="text-xs text-white/45 underline-offset-2 hover:text-white/70 hover:underline"
+              >
+                No wallet? Use a temporary guest wallet
               </button>
             </div>
           )}
 
           {phase === "waiting" && (
-            <div className="flex min-h-[420px] flex-col items-center justify-center gap-4 text-center">
+            <div className="flex min-h-[420px] flex-col items-center justify-center gap-5 text-center">
               <div className="h-10 w-10 animate-spin rounded-full border-4 border-uno-yellow border-t-transparent" />
               <p className="text-white/70" data-testid="waiting">
-                Waiting for a table… (the game auto-starts with the app)
+                Looking for your seat at the table…
               </p>
+              <p className="max-w-sm text-xs text-white/45">
+                If no game is waiting for your wallet, start a fresh one — you'll be seated against the bots.
+              </p>
+              <button
+                type="button"
+                data-testid="start-game"
+                onClick={() => void startGame()}
+                disabled={starting}
+                className="rounded-full bg-uno-green px-8 py-3 font-bold text-white transition hover:brightness-110 disabled:opacity-50"
+              >
+                {starting ? "Starting…" : "Start a game"}
+              </button>
             </div>
           )}
 

@@ -17,6 +17,8 @@
     "demo": "tsx scripts/record-demo.ts"
   },
   "dependencies": {
+    "@hono/node-server": "^1.13.0",
+    "@metamask/delegation-toolkit": "0.13.0",
     "@nexus/backend": "workspace:*",
     "@nexus/core": "workspace:*",
     "@nexus/react": "workspace:*",
@@ -24,7 +26,6 @@
     "@nexus/secrets": "workspace:*",
     "@nexus/server": "workspace:*",
     "@nexus/types": "workspace:*",
-    "@hono/node-server": "^1.13.0",
     "hono": "^4.6.0",
     "next": "^15.1.0",
     "react": "^19.0.0",

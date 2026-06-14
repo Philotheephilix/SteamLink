@@ -49,6 +49,11 @@ export class UnoClient {
     return this.get("/api/state");
   }
 
+  /** Seat THIS wallet (seat 0) + the server bots and start a fresh game. */
+  start(): Promise<{ ok: boolean; roomId?: string; error?: string }> {
+    return this.post("/api/start", { human: this.account.address });
+  }
+
   /** Reveal the caller's OWN sealed hand + the legal-play indices. */
   hand(): Promise<{ ok: boolean; hand: UnoCard[]; legal: number[]; handCount: number; error?: string }> {
     return this.post("/api/hand", { player: this.account.address });

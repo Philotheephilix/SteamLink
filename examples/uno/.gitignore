@@ -17,3 +17,4 @@ playwright-report/
 
 # Local env
 .env.local
+.vercel

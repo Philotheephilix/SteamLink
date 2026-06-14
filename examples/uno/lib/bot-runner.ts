@@ -78,6 +78,12 @@ export async function runBots(bots: PlayerKey[], roomId: string): Promise<void> 
       await sleep(1500);
       continue;
     }
+    // If the game was re-seated (a real player started a new room), this loop's
+    // turn-bound delegations are stale — stop and let the new loop take over.
+    if (st.roomId && String(st.roomId) !== roomId) {
+      console.log(`[bot-runner] room changed (${roomId} → ${st.roomId}); stopping stale loop`);
+      return;
+    }
     if (st.winner) {
       console.log(`[bot-runner] game over — winner ${st.winner}; payout tx ${st.payoutTx}`);
       return;

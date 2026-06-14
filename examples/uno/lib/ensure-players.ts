@@ -34,7 +34,11 @@ export interface EnsurePlayersOptions {
   fresh?: boolean;
 }
 
-const PLAYERS_PATH = join(import.meta.dirname, "..", "players.local.json");
+// `import.meta.dirname` is undefined when this module is bundled into the Next.js
+// instrumentation hook, so fall back to the process cwd (the example root).
+const PLAYERS_BASE_DIR =
+  typeof import.meta.dirname === "string" ? join(import.meta.dirname, "..") : process.cwd();
+const PLAYERS_PATH = join(PLAYERS_BASE_DIR, "players.local.json");
 
 export function playersFilePath(): string {
   return PLAYERS_PATH;
@@ -99,26 +103,35 @@ export async function ensurePlayers(opts: EnsurePlayersOptions = {}): Promise<Pl
       console.log(`  ETH ok (${formatEther(haveEth)})`);
     }
 
-    // 2) USDC top-up.
+    // 2) USDC top-up — only when BELOW a playable minimum. The UNO entry fee is
+    //    0.1 USDC, so a small balance covers a full game. If the relayer is out of
+    //    USDC but the player already holds the minimum, warn and CONTINUE (don't
+    //    fail the run) — the player can still play with what it has. The relayer key
+    //    is shared with the Monopoly example, so its USDC can be temporarily drained.
+    const minPlayable = usdcToWei(process.env.USDC_MIN ?? "0.3");
     const haveUsdc = (await publicClient.readContract({
       address: deployment.usdc,
       abi: USDC_ABI,
       functionName: "balanceOf",
       args: [p.address],
     })) as bigint;
-    if (haveUsdc < usdcToWei(usdcEach)) {
-      const usdcHash = await relayerWallet.writeContract({
-        address: deployment.usdc,
-        abi: [
-          { type: "function", name: "transfer", inputs: [{ name: "to", type: "address" }, { name: "amount", type: "uint256" }], outputs: [{ name: "", type: "bool" }], stateMutability: "nonpayable" },
-        ],
-        functionName: "transfer",
-        args: [p.address, usdcToWei(usdcEach)],
-        account: relayer,
-        chain: baseSepolia,
-      });
-      await publicClient.waitForTransactionReceipt({ hash: usdcHash });
-      console.log(`  USDC +${usdcEach} tx ${usdcHash}`);
+    if (haveUsdc < minPlayable) {
+      try {
+        const usdcHash = await relayerWallet.writeContract({
+          address: deployment.usdc,
+          abi: [
+            { type: "function", name: "transfer", inputs: [{ name: "to", type: "address" }, { name: "amount", type: "uint256" }], outputs: [{ name: "", type: "bool" }], stateMutability: "nonpayable" },
+          ],
+          functionName: "transfer",
+          args: [p.address, usdcToWei(usdcEach) - haveUsdc],
+          account: relayer,
+          chain: baseSepolia,
+        });
+        await publicClient.waitForTransactionReceipt({ hash: usdcHash });
+        console.log(`  USDC topped to ${usdcEach} tx ${usdcHash}`);
+      } catch (e) {
+        console.log(`  ⚠ USDC top-up skipped (relayer low on USDC): player holds ${Number(haveUsdc) / 1e6} — ${String((e as Error).message ?? e).slice(0, 70)}`);
+      }
     } else {
       console.log(`  USDC ok (${Number(haveUsdc) / 1e6})`);
     }

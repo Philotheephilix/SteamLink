@@ -40,7 +40,8 @@ import { type UnoCard, cardLabel, legalPlays } from "./uno-rules";
 import { ENTRY_FEE_USDC } from "./config";
 
 // ── Sealed-hand secrets layer (real AES-256-GCM) ─────────────────────────────
-const secrets = new LocalSecrets();
+// `secrets` lives on the shared global store (below) so a hand sealed in the
+// instrumentation (auto-start) context can be revealed in a route-handler context.
 function ownerCondition(): AccessCondition[] {
   return [{ chain: "base-sepolia", method: "ownerOf", returns: { comparator: "=", value: ":userAddress" } }];
 }
@@ -68,21 +69,43 @@ interface GameState {
   paymentTx: Record<string, Hex>;
 }
 
-let game: GameState | null = null;
-let nextRoom = BigInt(Date.now() % 1_000_000) + 1000n;
+/**
+ * Next.js loads `instrumentation.ts` (the auto-start) and the API route handlers
+ * in SEPARATE module registries, so a plain module-level `let game` would give
+ * each context its OWN copy — the route handlers would never see the game the
+ * instrumentation hook started (the bug that made /api/state report "no game").
+ * Hoist ALL mutable singletons onto `globalThis` so every context in the single
+ * Node server process shares ONE instance (incl. `secrets`, so a hand sealed in
+ * one context reveals in another).
+ */
+interface UnoStore {
+  game: GameState | null;
+  nextRoom: bigint;
+  enginePromise: Promise<UnoEngine> | null;
+  chain: Promise<unknown>;
+  secrets: LocalSecrets;
+}
+const store: UnoStore = ((globalThis as unknown as { __nexusUnoStore?: UnoStore }).__nexusUnoStore ??= {
+  game: null,
+  // Full ms timestamp (not mod 1e6) so room IDs are unique + monotonic ACROSS
+  // server restarts — `% 1_000_000` cycles every ~16min and collided with rooms
+  // already opened on-chain (the pot reverts Pot_AlreadyOpen on re-open).
+  nextRoom: BigInt(Date.now()),
+  enginePromise: null,
+  chain: Promise.resolve(),
+  secrets: new LocalSecrets(),
+});
 
 // Engine is created lazily once (relayer wallet + ABIs).
-let enginePromise: Promise<UnoEngine> | null = null;
 function engine(): Promise<UnoEngine> {
-  if (!enginePromise) enginePromise = getEngine();
-  return enginePromise;
+  if (!store.enginePromise) store.enginePromise = getEngine();
+  return store.enginePromise;
 }
 
 // Serialize ALL relayer submissions (single key → sequential nonces).
-let chain: Promise<unknown> = Promise.resolve();
 function serialized<T>(fn: () => Promise<T>): Promise<T> {
-  const run = chain.then(fn, fn);
-  chain = run.then(() => undefined, () => undefined);
+  const run = store.chain.then(fn, fn);
+  store.chain = run.then(() => undefined, () => undefined);
   return run;
 }
 
@@ -95,12 +118,12 @@ function reviveSigned(s: SignedDelegation): SignedDelegation {
 }
 
 async function sealHand(hand: UnoCard[]): Promise<Sealed> {
-  return secrets.seal(enc.encode(JSON.stringify(hand)), ownerCondition());
+  return store.secrets.seal(enc.encode(JSON.stringify(hand)), ownerCondition());
 }
 async function revealSealed(g: GameState, player: Address): Promise<UnoCard[]> {
   const sealed = g.sealed.get(player.toLowerCase() as Address);
   if (!sealed) return [];
-  const bytes = await secrets.reveal(sealed, { caller: player, state: { ownerOf: player.toLowerCase() } });
+  const bytes = await store.secrets.reveal(sealed, { caller: player, state: { ownerOf: player.toLowerCase() } });
   return JSON.parse(dec.decode(bytes)) as UnoCard[];
 }
 async function reseal(g: GameState, player: Address): Promise<void> {
@@ -131,13 +154,13 @@ export function health() {
 }
 
 export function getState(): { ok: boolean; error?: string; currentTurn?: Address | null } & Record<string, unknown> {
-  if (!game) return { ok: false, error: "no game" };
-  return { ok: true, ...publicGame(game), currentTurn: game.game.currentPlayer() };
+  if (!store.game) return { ok: false, error: "no game" };
+  return { ok: true, ...publicGame(store.game), currentTurn: store.game.game.currentPlayer() };
 }
 
 /** True once a game exists and is seated. */
 export function hasGame(): boolean {
-  return game !== null;
+  return store.game !== null;
 }
 
 /**
@@ -152,14 +175,14 @@ export async function ensureGame(
   fee: string = ENTRY_FEE_USDC,
   force = false,
 ): Promise<{ ok: boolean; error?: string } & Record<string, unknown>> {
-  if (game && !force) return { ok: true, ...publicGame(game), reused: true };
+  if (store.game && !force) return { ok: true, ...publicGame(store.game), reused: true };
 
   const e = await engine();
   const order: Address[] = [human, ...bots];
 
   try {
     const result = await serialized(async () => {
-      const roomId = nextRoom++;
+      const roomId = store.nextRoom++;
       // 1) Draw a REAL on-chain random word and deal a full 108-card game from it.
       const { word, txHash: shuffleTx } = await randomShuffleWord(e);
       const ug = new UnoGame(order);
@@ -179,7 +202,7 @@ export async function ensureGame(
     const sealed = new Map<Address, Sealed>();
     for (const a of order) sealed.set(a.toLowerCase() as Address, await sealHand(result.ug.handOf(a)));
 
-    game = {
+    store.game = {
       roomId: result.roomId,
       fee,
       seats: order.map((a, i) => ({ address: a, role: i === 0 ? "human" : "bot", paid: false })),
@@ -194,7 +217,7 @@ export async function ensureGame(
     console.log(
       `[uno-backend] new game room ${result.roomId} seats ${order.length} — on-chain shuffle tx ${result.shuffleTx}, start card ${cardLabel(top)}`,
     );
-    return { ok: true, ...publicGame(game) };
+    return { ok: true, ...publicGame(store.game) };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
@@ -205,9 +228,9 @@ export async function charge(
   player: Address,
   signedBudget: SignedDelegation,
 ): Promise<{ ok: boolean; txHash?: Hex; blockNumber?: bigint; alreadyPaid?: boolean; error?: string }> {
-  if (!game) return { ok: false, error: "no game" };
+  if (!store.game) return { ok: false, error: "no game" };
   const e = await engine();
-  const g = game;
+  const g = store.game;
   const seat = g.seats.find((s) => s.address.toLowerCase() === player.toLowerCase());
   if (!seat) return { ok: false, error: "not a seat" };
   if (seat.paid) return { ok: true, txHash: g.paymentTx[seat.address], alreadyPaid: true };
@@ -232,8 +255,8 @@ export async function charge(
 export async function revealHand(
   player: Address,
 ): Promise<{ ok: boolean; hand?: UnoCard[]; legal?: number[]; handCount?: number; error?: string }> {
-  if (!game) return { ok: false, error: "no game" };
-  const g = game;
+  if (!store.game) return { ok: false, error: "no game" };
+  const g = store.game;
   try {
     const hand = await revealSealed(g, player);
     const legal = legalPlays(hand, g.game.topState());
@@ -264,9 +287,9 @@ export async function move(
   card?: UnoCard,
   chosenColor?: number,
 ): Promise<MoveOutcome> {
-  if (!game) return { ok: false, error: "no game", reject: "rule" };
+  if (!store.game) return { ok: false, error: "no game", reject: "rule" };
   const e = await engine();
-  const g = game;
+  const g = store.game;
   if (g.winner) return { ok: false, error: "game already won", winner: g.winner, reject: "rule" };
 
   try {
