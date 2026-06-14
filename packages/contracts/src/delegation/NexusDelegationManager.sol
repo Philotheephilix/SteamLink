@@ -2,6 +2,7 @@
 pragma solidity ^0.8.23;
 
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import {SignatureChecker} from "@openzeppelin/contracts/utils/cryptography/SignatureChecker.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {
     Caveat,
@@ -179,11 +180,16 @@ contract NexusDelegationManager is IDelegationManager, ReentrancyGuard {
             revert NonRootAuthorityUnsupported(delegation.authority);
         }
 
-        // 1) verify EIP-712 signature recovers the delegator
+        // 1) verify the EIP-712 signature is valid FOR the delegator. SignatureChecker
+        //    accepts BOTH a raw ECDSA signature (an EOA delegator — bots + guest
+        //    wallets) AND an ERC-1271 `isValidSignature` response (a smart-account
+        //    delegator — e.g. a MetaMask Smart Account / EIP-7702-upgraded EOA). This
+        //    is what lets a real MetaMask Smart Account sign the single delegation.
         bytes32 structHash = _hashDelegation(delegation);
         bytes32 digest = _digest(structHash);
-        address signer = ECDSA.recover(digest, delegation.signature);
-        if (signer != delegation.delegator) revert InvalidDelegationSignature();
+        if (!SignatureChecker.isValidSignatureNow(delegation.delegator, digest, delegation.signature)) {
+            revert InvalidDelegationSignature();
+        }
 
         // 2) redeemer authorization: open (address(0)) => anyone; else must match
         address redeemer = msg.sender;

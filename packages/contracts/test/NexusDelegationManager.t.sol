@@ -12,6 +12,7 @@ import {PerActionCapEnforcer} from "../src/enforcers/PerActionCapEnforcer.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
 import {NexusDelegationManager} from "../src/delegation/NexusDelegationManager.sol";
 import {Caveat, Delegation, ModeCode} from "../src/delegation/IDelegation.sol";
+import {MockSmartAccount} from "./mocks/MockSmartAccount.sol";
 
 /**
  * @notice LIVE redemption tests: a real EIP-712 signature (vm.sign over the
@@ -435,5 +436,69 @@ contract NexusDelegationManagerTest is Test {
             abi.encodeWithSelector(NexusDelegationManager.NonRootAuthorityUnsupported.selector, authority)
         );
         _redeem(d, _execForWorldCall(_incrementCall()));
+    }
+
+    // ── ERC-1271 smart-account delegator (MetaMask Smart Account / 7702) ──
+
+    /// @dev Exec that increments a SPECIFIC room (so a smart-account delegator can be
+    ///      that room's sole turn-holder).
+    function _incrementCallRoom(uint256 room) internal pure returns (bytes memory) {
+        return abi.encodeWithSignature("increment(uint256,uint256)", room, TARGET);
+    }
+
+    function test_Erc1271SmartAccount_Redeems() public {
+        // A smart account owned by alice's key is the DELEGATOR. The manager must
+        // accept its ERC-1271 isValidSignature response (not an ECDSA recover of the
+        // account address) — this is the MetaMask Smart Account path.
+        MockSmartAccount smart = new MockSmartAccount(alice);
+        uint256 room2 = 2;
+        address[] memory order = new address[](1);
+        order[0] = address(smart);
+        tm.startTurns(room2, order, 100);
+
+        Delegation memory d = Delegation({
+            delegate: relayer,
+            delegator: address(smart),
+            authority: bytes32(0),
+            caveats: _emptyCaveats(),
+            salt: 71,
+            maxRedemptions: 1,
+            signature: ""
+        });
+        // signed by the account's OWNER key (alice) — ERC-1271 validates it.
+        d = _signDelegation(d, alicePk);
+
+        vm.prank(relayer);
+        _redeem(d, _execForWorldCall(_incrementCallRoom(room2)));
+
+        // The smart account surfaced as the mover — a 1271 delegation redeemed.
+        CounterTable.CounterData memory c = CounterTable.get(IWorld(address(world)), room2);
+        assertEq(c.value, 1);
+        assertEq(c.lastMover, address(smart));
+    }
+
+    function test_Erc1271SmartAccount_WrongOwner_Reverts() public {
+        // Smart account owned by alice, but signed by bob → isValidSignature returns
+        // the failure value → manager rejects.
+        MockSmartAccount smart = new MockSmartAccount(alice);
+        uint256 room3 = 3;
+        address[] memory order = new address[](1);
+        order[0] = address(smart);
+        tm.startTurns(room3, order, 100);
+
+        Delegation memory d = Delegation({
+            delegate: relayer,
+            delegator: address(smart),
+            authority: bytes32(0),
+            caveats: _emptyCaveats(),
+            salt: 72,
+            maxRedemptions: 1,
+            signature: ""
+        });
+        d = _signDelegation(d, bobPk); // wrong signer
+
+        vm.prank(relayer);
+        vm.expectRevert(NexusDelegationManager.InvalidDelegationSignature.selector);
+        _redeem(d, _execForWorldCall(_incrementCallRoom(room3)));
     }
 }
