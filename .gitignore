@@ -50,3 +50,4 @@ examples/**/.last-run.json
 examples/**/demos/
 **/*.webm
 **/*.mp4
+.vercel
