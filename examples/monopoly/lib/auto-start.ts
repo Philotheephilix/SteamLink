@@ -19,11 +19,43 @@
  *
  * NEVER import from a client component.
  */
+import type { Address, Hex } from "@nexus/types";
 import { ensurePlayers, readPlayers, type PlayerKey } from "./ensure-players";
 import { ensureGame, getState } from "./game-backend";
 import { runDriver } from "./bot-runner";
 
 let started = false;
+
+/**
+ * Start a FRESH game seated with a REAL connected player (their wallet address) as
+ * seat 0, plus the server-side bots, and launch the in-process driver. This powers
+ * the browser "Start a game" button: a MetaMask/guest player whose address is not the
+ * demo's auto-seeded human gets their own seat. Re-seating (force) replaces any
+ * existing game; the previous driver loop stops itself when the room changes.
+ *
+ * The connecting wallet's key never reaches the server — only its address. The driver
+ * only uses `human.address` (to auto-pilot the seat by redeeming the gameplay/budget
+ * delegations the browser caches when it pays the buy-in), so a synthetic PlayerKey
+ * carrying just the address is sufficient.
+ */
+export async function startGameForHuman(
+  human: Address,
+): Promise<{ ok: boolean; error?: string; roomId?: string } & Record<string, unknown>> {
+  const players = await ensurePlayerKeys();
+  let bots = players.filter((p) => p.role === "bot");
+  const maxBots = process.env.MONOPOLY_BOTS ? Number(process.env.MONOPOLY_BOTS) : 1;
+  bots = bots.slice(0, maxBots);
+  if (bots.length === 0) return { ok: false, error: "no bots configured" };
+  const game = await ensureGame(human, bots.map((b) => b.address), undefined, true);
+  if (!game.ok) return game;
+  const roomId = String((game as { roomId?: string }).roomId);
+  const humanSeat: PlayerKey = { role: "human", index: 0, privateKey: ("0x" as Hex), address: human };
+  console.log(`[start] seated player ${human} in room ${roomId}; launching ${bots.length} bot(s)`);
+  void runDriver(humanSeat, bots, roomId).catch((err) =>
+    console.error("[start] bot-runner crashed:", err instanceof Error ? err.message : err),
+  );
+  return game;
+}
 
 async function ensurePlayerKeys(): Promise<PlayerKey[]> {
   try {

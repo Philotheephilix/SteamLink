@@ -123,6 +123,12 @@ export async function runDriver(human: PlayerKey, bots: PlayerKey[], roomId: str
   while (Date.now() < DEADLINE) {
     const st = snapshotState();
     if (!st.ok) { await sleep(1500); continue; }
+    // If the game was re-seated (a real player started a new room), this loop's
+    // turn-bound delegations are stale — stop and let the new loop take over.
+    if ((st as any).roomId && String((st as any).roomId) !== roomId) {
+      console.log(`[bot-runner] room changed (${roomId} → ${(st as any).roomId}); stopping stale loop`);
+      return;
+    }
     if ((st as any).winner) {
       console.log(`[bot-runner] game over — winner ${(st as any).winner}; payout tx ${(st as any).payoutTx}`);
       return;

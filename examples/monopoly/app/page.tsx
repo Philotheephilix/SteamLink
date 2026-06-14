@@ -1,12 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { LocalAccount } from "viem/accounts";
-import { getGuestAccount, PRIVY_ENABLED } from "./wallet";
+import { PRIVY_ENABLED } from "./wallet";
 import { Board, Pawn, tokenColorFor } from "./components/Board";
 import { Dice } from "./components/Dice";
 import { MonopolyClient, type GameView } from "@/lib/monopoly-client";
 import { BOARD } from "@/lib/board";
+import { connectMetaMask, connectGuest, clearGuest, hasInjectedWallet, type Connection } from "@/lib/signer";
 
 // Empty → same-origin /api/* (the backend now lives in this Next app). Only set
 // NEXT_PUBLIC_MONOPOLY_BACKEND_URL to talk to a separate origin.
@@ -19,12 +19,15 @@ function short(a?: string | null) {
 }
 
 export default function Page() {
-  const [account, setAccount] = useState<LocalAccount | null>(null);
+  const [conn, setConn] = useState<Connection | null>(null);
+  const account = conn?.account ?? null;
   const [phase, setPhase] = useState<Phase>("connect");
   const [view, setView] = useState<GameView | null>(null);
   const [busy, setBusy] = useState(false);
   const [rolling, setRolling] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [starting, setStarting] = useState(false);
   const [paymentTx, setPaymentTx] = useState<string | null>(null);
   const [lastTx, setLastTx] = useState<{ text: string; tx: string } | null>(null);
   const [die, setDie] = useState<{ d1: number; d2: number }>({ d1: 0, d2: 0 });
@@ -37,14 +40,65 @@ export default function Page() {
 
   const client = useMemo(() => (account ? new MonopolyClient(BACKEND_URL, account) : null), [account]);
 
+  const connectWith = useCallback(
+    async (mode: "metamask" | "guest") => {
+      setErr(null);
+      try {
+        const c = mode === "metamask" ? await connectMetaMask() : connectGuest();
+        setConn(c);
+        setPhase("waiting");
+        addLog(`connected ${c.kind === "metamask" ? "MetaMask Smart Account" : "guest wallet"} ${short(c.account.address)}`);
+        if (typeof window !== "undefined") (window as unknown as Record<string, unknown>).__MONOPOLY_ADDR__ = c.account.address;
+      } catch (e) {
+        setErr(e instanceof Error ? e.message : String(e));
+      }
+    },
+    [addLog],
+  );
+  // Default Connect: MetaMask if an injected wallet is present, else a guest wallet
+  // (keeps the headless e2e — which has no injected wallet — working unchanged).
   const connect = useCallback(() => {
+    void connectWith(hasInjectedWallet() ? "metamask" : "guest");
+  }, [connectWith]);
+
+  const disconnect = useCallback(() => {
+    if (conn?.kind === "guest") clearGuest();
+    setConn(null);
+    setView(null);
+    setPhase("connect");
+    joinedRef.current = false;
+    setPaymentTx(null);
+    addLog("disconnected");
+  }, [conn, addLog]);
+
+  const copyAddr = useCallback(async () => {
+    if (!account) return;
+    try {
+      await navigator.clipboard.writeText(account.address);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
+    } catch {
+      /* clipboard blocked */
+    }
+  }, [account]);
+
+  // Start a fresh game seated with THIS wallet (used when the connected address
+  // isn't already seated in the auto-started demo game).
+  const startGame = useCallback(async () => {
+    if (!client || starting) return;
+    setStarting(true);
     setErr(null);
-    const a = getGuestAccount();
-    setAccount(a);
-    setPhase("waiting");
-    addLog(`connected as guest wallet ${short(a.address)}`);
-    if (typeof window !== "undefined") (window as unknown as Record<string, unknown>).__MONOPOLY_ADDR__ = a.address;
-  }, [addLog]);
+    try {
+      addLog("starting a game with your wallet…");
+      const res = await client.start();
+      if (!res.ok) throw new Error(res.error ?? "could not start a game");
+      addLog(`game ${res.roomId ?? ""} started — you're seated`);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setStarting(false);
+    }
+  }, [client, starting, addLog]);
 
   const me = useMemo(() => {
     if (!account || !view) return null;
@@ -85,6 +139,13 @@ export default function Page() {
     setBusy(true);
     setErr(null);
     try {
+      // Player brings their own USDC: make sure the delegation manager is approved to
+      // pull the buy-in (one `approve` — MetaMask Smart Account UserOp, or silent for guest).
+      const buyInWei = BigInt(Math.round(Number(view.fee) * 1e6));
+      if (conn) {
+        addLog("checking USDC allowance (approve if needed)…");
+        await conn.ensureApproval(buyInWei);
+      }
       addLog(`signing gameplay + budget delegation, paying ${view.fee} USDC buy-in (x402)…`);
       const res = await client.join(view.roomId, view.pot);
       if (!res.ok || !res.txHash) throw new Error(res.error ?? "buy-in failed");
@@ -98,7 +159,7 @@ export default function Page() {
     } finally {
       setBusy(false);
     }
-  }, [client, view, addLog]);
+  }, [client, view, conn, addLog]);
 
   const act = useCallback(
     async (action: string, spaceId?: number) => {
@@ -163,9 +224,20 @@ export default function Page() {
             from your wallet, bounded on-chain. <b>Win = be the last player not bankrupt.</b>
           </p>
           <button data-testid="login-btn" onClick={connect} className="btn btn-primary w-full mt-8 py-3 text-base">
-            {PRIVY_ENABLED ? "Log in with Privy" : "Play as Guest"}
+            {hasInjectedWallet() ? "🦊 Connect MetaMask" : PRIVY_ENABLED ? "Log in with Privy" : "Play as Guest"}
           </button>
-          <div className="text-emerald-300/50 text-[11px] mt-4">Guest wallet (generated locally · no account needed)</div>
+          <button
+            type="button"
+            data-testid="connect-guest"
+            onClick={() => void connectWith("guest")}
+            className="block w-full mt-3 text-emerald-300/50 text-[11px] hover:text-emerald-200/80 underline-offset-2 hover:underline"
+          >
+            No wallet? Use a temporary guest wallet
+          </button>
+          <div className="text-emerald-300/50 text-[11px] mt-4">
+            MetaMask derives a Hybrid smart account · bring a little Base-Sepolia USDC for the buy-in
+          </div>
+          {err && <div className="mt-4 rounded-xl p-3 bg-rose-950/60 border border-rose-500/40 text-rose-200 text-xs" data-testid="error">{err}</div>}
         </div>
       </main>
     );
@@ -179,12 +251,40 @@ export default function Page() {
             <span className="gold-text text-2xl font-bold tracking-tight">NEXUS</span>
             <span className="text-emerald-200/70 text-sm ml-2 tracking-[0.25em]">MONOPOLY · FULL RULES</span>
           </div>
-          <div className="panel rounded-xl px-3 py-1.5 text-right">
-            <div className="text-[10px] text-emerald-300/60 uppercase tracking-wider">guest wallet</div>
-            <div data-testid="wallet-address" className="mono text-xs text-emerald-100">
-              {account ? `${account.address.slice(0, 6)}…${account.address.slice(-4)}` : "—"}
+          {account ? (
+            <div className="flex items-center gap-2">
+              <span
+                className="rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
+                style={{ background: conn?.kind === "metamask" ? "#f6851b22" : "#10b98122", color: conn?.kind === "metamask" ? "#f6851b" : "#6ee7b7" }}
+              >
+                {conn?.kind === "metamask" ? "Smart Account" : "Guest"}
+              </span>
+              <button
+                type="button"
+                onClick={copyAddr}
+                data-testid="wallet-address"
+                title="Copy address"
+                className="panel mono flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs text-emerald-100 transition hover:brightness-125"
+              >
+                <span>{short(account.address)}</span>
+                <span className="text-emerald-300/50">{copied ? "✓" : "⧉"}</span>
+              </button>
+              <button
+                type="button"
+                onClick={disconnect}
+                data-testid="disconnect"
+                title="Disconnect"
+                className="rounded-xl px-3 py-1.5 text-xs text-emerald-300/50 transition hover:bg-rose-500/20 hover:text-rose-200"
+              >
+                Disconnect
+              </button>
             </div>
-          </div>
+          ) : (
+            <div className="panel rounded-xl px-3 py-1.5 text-right">
+              <div className="text-[10px] text-emerald-300/60 uppercase tracking-wider">not connected</div>
+              <div data-testid="wallet-address" className="mono text-xs text-emerald-100">—</div>
+            </div>
+          )}
         </header>
 
         <div className="grid lg:grid-cols-[1fr_360px] gap-6">
@@ -196,7 +296,19 @@ export default function Page() {
             {phase === "waiting" && (
               <div className="panel rounded-2xl p-6 text-center" data-testid="waiting">
                 <div className="h-8 w-8 mx-auto animate-spin rounded-full border-4 border-emerald-400 border-t-transparent" />
-                <p className="text-emerald-200/70 text-sm mt-3">Waiting for a table… (start the bots: <code className="gold-text">pnpm bots</code>)</p>
+                <p className="text-emerald-200/70 text-sm mt-3">Looking for your seat at the table…</p>
+                <p className="text-emerald-300/50 text-[11px] mt-2">
+                  If no game is waiting for your wallet, start a fresh one — you'll be seated against the bots.
+                </p>
+                <button
+                  type="button"
+                  data-testid="start-game"
+                  onClick={() => void startGame()}
+                  disabled={starting}
+                  className="btn btn-gold w-full mt-4 py-2.5 disabled:opacity-50"
+                >
+                  {starting ? "Starting…" : "Start a game"}
+                </button>
               </div>
             )}
 

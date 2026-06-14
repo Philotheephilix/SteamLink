@@ -1,22 +1,22 @@
 {
   "chainId": 84532,
-  "delegationManager": "0x116108878d02aA56C16b908b6CEf700C91aC1D66",
+  "delegationManager": "0x9C1d2B181D9D242cCC0C86B14dADe8153E688eD5",
   "enforcers": {
-    "allowedRecipients": "0x314a65af9bca1310D8180e775719537B286f02BF",
-    "erc20TransferAmount": "0x34b839815C9D70663f58A67CE6cD39689230D7E0",
-    "limitedCalls": "0xA07744861585286D0dFDb6577D0C572d99a28E1A",
-    "perActionCap": "0xCadE9DcBbA6DDCb704f60925e91E09aB587aAd65",
-    "systemAllowlist": "0x4971C28a233B6C38D30bdC79B4BA4be26B2B1700",
-    "timestamp": "0x70F66698eb3bbf6fE20b6a7b6b36e3C2A5857e45",
-    "turnBound": "0x258D2577D79f3FFcF69Cba1ff085c3efAbB7e1bB"
+    "allowedRecipients": "0x30c7c967CC03a7f135be6EE00608bCDfeAf27822",
+    "erc20TransferAmount": "0x48105e541dDE6730e693160f02F74De8d7e88A99",
+    "limitedCalls": "0x4338Ad0a0335f2aa7e4AC9ba9Fbd45a7F58676eB",
+    "perActionCap": "0x6966E0bf6378c7c906fF1e0FF077116A88F31AA3",
+    "systemAllowlist": "0x09f1a9E05B7ed7bC535b32E39d4FbC6DC365Cb24",
+    "timestamp": "0x3c7b32Aad513fD47aE3F83BE8E028C5c6213B377",
+    "turnBound": "0xAf49155c098A780813a50294db37220A8B4687a7"
   },
-  "monopolyGame": "0x04487cfabf6eCBE74b7fe3C7eFB4B991684Bdd11",
+  "monopolyGame": "0x706cBbdcdf28f2487fafa5bC53a3f61C80786Ca4",
   "monopolyGameSystemId": "0xc5a3bfafbfff9a5398c0d6f759a03d359832b849cd8ab54e458e2e0edca42ed8",
-  "pot": "0xABA00f43ff4996b99187a62ed8dB7133870E92E9",
-  "randomness": "0xA17BDB52022Bd6146Fa4d2d8324D72d8DdC2F848",
+  "pot": "0x87109EAe342Ee671028d6259fDd0A8Aa7c729Ad7",
+  "randomness": "0xA3A54D08F0F776E5Ad51b53187956242024Cad63",
   "relayer": "0xA3327d90d087cdddfB99E598E50B5Bdee7fC55bD",
   "roomId": 1,
-  "turnManager": "0xBE2b32C1C748aC28859f6Cb31871b0A3a4e93135",
+  "turnManager": "0x36A2086dAf730De82bf2D65AE5838c085844932e",
   "usdc": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
-  "world": "0xFE92855988f8215C9FBbF408dd0cfDA341aF7a64"
+  "world": "0x034096F54d1f09aB5dF7967f0E7B06Ea44ef8f9C"
 }

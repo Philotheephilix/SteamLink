@@ -70,7 +70,10 @@ interface MonopolyStore {
 }
 const store: MonopolyStore = ((globalThis as unknown as { __nexusMonopolyStore?: MonopolyStore }).__nexusMonopolyStore ??= {
   game: null,
-  nextRoom: BigInt(Date.now() % 1_000_000) + 2000n,
+  // Full ms timestamp (not mod 1e6) so room IDs are unique + monotonic ACROSS
+  // server restarts — `% 1_000_000` cycles every ~16min and collided with rooms
+  // already opened on-chain (the pot reverts Pot_AlreadyOpen on re-open).
+  nextRoom: BigInt(Date.now()),
   enginePromise: null,
   chain: Promise.resolve(),
 });

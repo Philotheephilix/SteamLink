@@ -90,6 +90,11 @@ export class MonopolyClient {
     return this.get("/api/state");
   }
 
+  /** Seat THIS wallet (seat 0) + the server bots and start a fresh game. */
+  start(): Promise<{ ok: boolean; roomId?: string; error?: string }> {
+    return this.post("/api/start", { human: this.address });
+  }
+
   private budgetByPot = new Map<string, Awaited<ReturnType<typeof signBudgetDelegation>>>();
   private async budget(pot: Address) {
     let s = this.budgetByPot.get(pot.toLowerCase());

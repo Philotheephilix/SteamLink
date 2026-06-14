@@ -17,6 +17,7 @@
     "demo": "tsx scripts/record-demo.ts"
   },
   "dependencies": {
+    "@metamask/delegation-toolkit": "0.13.0",
     "@nexus/backend": "workspace:*",
     "@nexus/core": "workspace:*",
     "@nexus/react": "workspace:*",
