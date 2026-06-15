@@ -26,6 +26,7 @@ import {
 } from "@steamlink/core";
 import { revertDataOf } from "@steamlink/relayer";
 import type { Address, Hex } from "@steamlink/types";
+import { OneShotPublicRelayer } from "./oneshot-relayer";
 import {
   http,
   type Chain,
@@ -36,7 +37,15 @@ import {
   encodeFunctionData,
 } from "viem";
 import { type LocalAccount, privateKeyToAccount } from "viem/accounts";
-import { BASE_SEPOLIA_CHAIN_ID, BASE_SEPOLIA_RPC_URL, RELAYER_PRIVATE_KEY } from "./config";
+import {
+  BASE_SEPOLIA_CHAIN_ID,
+  BASE_SEPOLIA_RPC_URL,
+  ONESHOT_BEARER,
+  ONESHOT_DESTINATION_URL,
+  ONESHOT_ENDPOINT,
+  RELAYER_MODE,
+  RELAYER_PRIVATE_KEY,
+} from "./config";
 import { addresses, deployment, MONOPOLY_SYSTEM_ID } from "./deployment";
 
 export const baseSepolia = {
@@ -235,6 +244,8 @@ export interface MonopolyEngine {
   relayerWallet: RelayerWallet;
   relayer: LocalAccount;
   addrs: DeploymentAddresses;
+  /** Present only when MONOPOLY_RELAYER=oneshot — the 1Shot public-relayer rail. */
+  oneshot?: OneShotPublicRelayer;
 }
 
 let cached: Promise<MonopolyEngine> | null = null;
@@ -248,7 +259,35 @@ async function boot(): Promise<MonopolyEngine> {
   const publicClient = createPublicClient({ chain: baseSepolia, transport: http(BASE_SEPOLIA_RPC_URL) }) as PublicClient;
   const rawWallet = createWalletClient({ account: relayer, chain: baseSepolia, transport: http(BASE_SEPOLIA_RPC_URL) });
   const relayerWallet = wrapRetryingWallet(rawWallet, publicClient, relayer);
-  return { publicClient, relayerWallet, relayer, addrs: addresses };
+
+  let oneshot: OneShotPublicRelayer | undefined;
+  if (RELAYER_MODE === "oneshot") {
+    oneshot = new OneShotPublicRelayer({
+      endpoint: ONESHOT_ENDPOINT,
+      chainId: BASE_SEPOLIA_CHAIN_ID,
+      bearerToken: ONESHOT_BEARER || undefined,
+      destinationUrl: ONESHOT_DESTINATION_URL || undefined,
+    });
+    // Startup guard: a 7710 redemption only settles if the player delegation's
+    // `delegate` equals the relayer's targetAddress. Surface a mismatch at boot
+    // (the demo's delegations are signed for RELAYER_ADDRESS) instead of as a
+    // silent on-chain revert later. Non-fatal — log and continue.
+    void oneshot
+      .getCapabilities()
+      .then((caps) => {
+        if (caps.targetAddress.toLowerCase() !== relayer.address.toLowerCase()) {
+          console.warn(
+            `[monopoly] MONOPOLY_RELAYER=oneshot: 1Shot targetAddress ${caps.targetAddress} != delegation delegate ${relayer.address}. ` +
+              "Redemptions will revert unless player delegations are signed for the 1Shot target.",
+          );
+        } else {
+          console.info(`[monopoly] 1Shot relayer rail active (target ${caps.targetAddress}).`);
+        }
+      })
+      .catch((e) => console.warn(`[monopoly] 1Shot capabilities probe failed: ${(e as Error).message}`));
+  }
+
+  return { publicClient, relayerWallet, relayer, addrs: addresses, oneshot };
 }
 
 // Per-player delegation signing (each player signs with its OWN key) lives in the
@@ -373,10 +412,31 @@ function wrapRetryingWallet(
   return { account, writeContract: (a) => run("write", a), sendTransaction: (a) => run("send", a) };
 }
 
-async function submitAndConfirm(
-  e: MonopolyEngine,
-  data: Hex,
-): Promise<{ txHash: Hex; blockNumber: bigint; logs: { address: string; topics: readonly Hex[]; data: Hex }[] }> {
+type SubmitResult = { txHash: Hex; blockNumber: bigint; logs: { address: string; topics: readonly Hex[]; data: Hex }[] };
+
+/**
+ * Submit a single player-delegation redemption through the configured rail and
+ * confirm it on-chain. Both rails resolve to the same shape (txHash + the
+ * receipt's block + logs), so callers (roll/charge/action/endTurn) are rail-agnostic.
+ *
+ *   - direct  (default): build `manager.redeemDelegations(...)` calldata and
+ *                        self-relay it via the funded relayer key.
+ *   - oneshot: hand the structured delegation + execution to the 1Shot public
+ *              relayer (gas in stablecoin), then read the receipt for block + logs.
+ */
+async function submitRedemption(e: MonopolyEngine, signed: SignedDelegation, exec: Hex): Promise<SubmitResult> {
+  if (e.oneshot) {
+    const { txHash } = await e.oneshot.redeem(signed, exec);
+    const receipt = await e.publicClient.waitForTransactionReceipt({ hash: txHash });
+    if (receipt.status !== "success") throw new Error(`1Shot redemption reverted on-chain (tx ${txHash})`);
+    return {
+      txHash,
+      blockNumber: receipt.blockNumber,
+      logs: receipt.logs.map((l) => ({ address: l.address, topics: l.topics as readonly Hex[], data: l.data })),
+    };
+  }
+
+  const data = buildRedeemCalldata(encodePermissionContext(signed), exec);
   const hash = (await e.relayerWallet.sendTransaction({
     account: e.relayer,
     chain: baseSepolia,
@@ -413,10 +473,8 @@ export async function redeemRoll(
 ): Promise<RollResult> {
   const inner = encodeFunctionData({ abi: MONOPOLY_ABI, functionName: "rollAndMove", args: [roomId] });
   const exec = buildMoveExecution(e.addrs, MONOPOLY_SYSTEM_ID, inner);
-  const ctx = encodePermissionContext(signedGameplay);
-  const data = buildRedeemCalldata(ctx, exec);
   // A roll revert == "not your turn" (turn-bound enforcer) — fail fast, don't retry.
-  const { txHash, blockNumber, logs } = await withRetry(() => submitAndConfirm(e, data), 3, false);
+  const { txHash, blockNumber, logs } = await withRetry(() => submitRedemption(e, signedGameplay, exec), 3, false);
 
   // Decode the Monopoly_Rolled event from the move's own receipt logs (immune to
   // public-RPC read-after-write lag). topics: [sig, roomId, player]; data holds the
@@ -444,9 +502,7 @@ export async function chargeFromPlayer(
   amount: string,
 ): Promise<{ status: "mined"; txHash: Hex; blockNumber: bigint }> {
   const exec = buildChargeFromExecution(e.addrs, player, pot, amount);
-  const ctx = encodePermissionContext(signedBudget);
-  const data = buildRedeemCalldata(ctx, exec);
-  const { txHash, blockNumber } = await withRetry(() => submitAndConfirm(e, data));
+  const { txHash, blockNumber } = await withRetry(() => submitRedemption(e, signedBudget, exec));
   return { status: "mined", txHash, blockNumber };
 }
 
@@ -465,10 +521,8 @@ export async function redeemAction(
   const tag = actionTag(action);
   const inner = encodeFunctionData({ abi: MONOPOLY_ABI, functionName: "recordAction", args: [roomId, tag, BigInt(spaceId), amount] });
   const exec = buildMoveExecution(e.addrs, MONOPOLY_SYSTEM_ID, inner);
-  const ctx = encodePermissionContext(signedGameplay);
-  const data = buildRedeemCalldata(ctx, exec);
   // A turn-bound revert is deterministic — fail fast.
-  const { txHash, blockNumber } = await withRetry(() => submitAndConfirm(e, data), 3, false);
+  const { txHash, blockNumber } = await withRetry(() => submitRedemption(e, signedGameplay, exec), 3, false);
   return { status: "mined", txHash, blockNumber };
 }
 
@@ -481,9 +535,7 @@ export async function redeemEndTurn(
 ): Promise<{ status: "mined"; txHash: Hex; blockNumber: bigint }> {
   const inner = encodeFunctionData({ abi: MONOPOLY_ABI, functionName: "endTurn", args: [roomId] });
   const exec = buildMoveExecution(e.addrs, MONOPOLY_SYSTEM_ID, inner);
-  const ctx = encodePermissionContext(signedGameplay);
-  const data = buildRedeemCalldata(ctx, exec);
-  const { txHash, blockNumber } = await withRetry(() => submitAndConfirm(e, data), 3, false);
+  const { txHash, blockNumber } = await withRetry(() => submitRedemption(e, signedGameplay, exec), 3, false);
   return { status: "mined", txHash, blockNumber };
 }
 

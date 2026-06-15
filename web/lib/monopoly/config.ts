@@ -72,6 +72,24 @@ export const BASE_SEPOLIA_CHAIN_ID = 84532;
  *  charges are real but tiny. The pot pays the last solvent player on settle. */
 export const ENTRY_FEE_USDC = process.env.ENTRY_FEE_USDC || "0.05";
 
+// ── relayer rail selection ────────────────────────────────────────────────────
+// `direct`  (default) — self-relay every redemption through the funded relayer key
+//                       against the project's NexusDelegationManager (the demo path).
+// `oneshot`           — route redemptions through the 1Shot Permissionless Public
+//                       Relayer (gas paid in stablecoin). Toggle with MONOPOLY_RELAYER.
+export type RelayerMode = "direct" | "oneshot";
+export const RELAYER_MODE: RelayerMode =
+  process.env.MONOPOLY_RELAYER === "oneshot" ? "oneshot" : "direct";
+
+/** 1Shot public relayer JSON-RPC endpoint (Base mainnet host by default; pass the
+ *  testnet host for Base-Sepolia infra). Only used when RELAYER_MODE === "oneshot". */
+export const ONESHOT_ENDPOINT =
+  process.env.ONESHOT_RELAYER_ENDPOINT || "https://relayer.1shotapi.com/relayers";
+/** Optional bearer token for an authenticated 1Shot relayer instance (permissionless calls omit it). */
+export const ONESHOT_BEARER = process.env.ONESHOT_RELAYER_BEARER || "";
+/** Optional URL the relayer should POST status to (polling is the fallback). */
+export const ONESHOT_DESTINATION_URL = process.env.ONESHOT_RELAYER_DESTINATION_URL || "";
+
 export function serverConfig(): MonopolyServerConfig {
   const relayerKey = (process.env.NEXUS_RELAYER_PRIVATE_KEY || HARDCODED_RELAYER_KEY) as `0x${string}`;
   return {
