@@ -185,13 +185,18 @@ const MANAGER_VIEW_ABI = [
   },
 ] as const;
 
-/** ERC20TransferAmountEnforcer.spentMap(delegationHash) — cumulative spend. */
+/** ERC20TransferAmountEnforcer.spentMap(manager, delegationHash) — cumulative spend.
+ *  Keyed on the caller (the DelegationManager) since the C1 hardening, so a direct
+ *  griefer can't pollute the manager's counter. */
 const SPENT_MAP_ABI = [
   {
     type: "function",
     name: "spentMap",
     stateMutability: "view",
-    inputs: [{ name: "", type: "bytes32" }],
+    inputs: [
+      { name: "manager", type: "address" },
+      { name: "delegationHash", type: "bytes32" },
+    ],
     outputs: [{ name: "", type: "uint256" }],
   },
 ] as const;
@@ -732,7 +737,7 @@ export async function runIntegration(t: IntegrationTarget): Promise<number> {
           address: addrs.enforcers.erc20TransferAmount,
           abi: SPENT_MAP_ABI,
           functionName: "spentMap",
-          args: [delegationHash],
+          args: [addrs.delegationManager, delegationHash],
         });
         if (spent >= expected) return;
         await new Promise((r) => setTimeout(r, 1000));
