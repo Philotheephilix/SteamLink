@@ -1,5 +1,9 @@
 # SteamLink
 
+[![Docs](https://img.shields.io/badge/Docs-steamlink.vercel.app%2Fdocs-e4572e?logo=readthedocs&logoColor=white&style=for-the-badge)](https://steamlink.vercel.app/docs)
+[![Base Sepolia](https://img.shields.io/badge/Base-Sepolia%C2%B784532-0052ff?logo=coinbase&logoColor=white&style=for-the-badge)](https://sepolia.basescan.org)
+[![npm @steamlink/core](https://img.shields.io/npm/v/@steamlink/core?label=%40steamlink%2Fcore&style=for-the-badge&color=cb3837&logo=npm)](https://www.npmjs.com/package/@steamlink/core)
+
 **Fully onchain, turn-based games on Base — one signature, then every move is gasless and every
 payment is bounded on-chain.** SteamLink is a game-engine SDK (engine name: *Nexus*). A player signs
 **one** ERC-7710 delegation when they join a room; a relayer redeems that single signature for
@@ -138,6 +142,48 @@ pnpm --filter @nexus/example-uno dev   # http://localhost:3100 — boots the gam
 
 Open the URL, connect a wallet, and play. The app auto-seats a table against bots; you sign one
 delegation and every move + payment settles on-chain, gaslessly.
+
+## Documentation
+
+Full docs — the **SDK reference** (every `@steamlink/*` module and method) and the **Contribute a
+game** guide — live at **[steamlink.vercel.app/docs](https://steamlink.vercel.app/docs)**.
+
+## Contributing — add a game
+
+Want a new game on the shelf, like UNO or Monopoly? The complete, step-by-step walkthrough is the
+**Contribute a game** tab in the docs:
+
+**→ [steamlink.vercel.app/docs](https://steamlink.vercel.app/docs)**
+
+The short version:
+
+1. **Fork & branch** — fork this repo, `git checkout -b feat/<your-game>`.
+2. **Define** — `defineGame(...)` your tables + Solidity system paths in `web/lib/<game>/game.ts`.
+3. **Write systems** — real Solidity under `packages/contracts/src/systems/`; `forge test` them.
+4. **Deploy** — deploy the World + systems to Base Sepolia; record addresses in
+   `web/lib/<game>/deployments/base-sepolia.json`.
+5. **Wire the backend** — namespaced handlers in `web/app/api/<game>/*`, booted from
+   `web/instrumentation.ts`.
+6. **Add the UI** — `web/app/play/<game>/page.tsx` on the shared `useWallet()` provider, with every
+   tx hash rendered through `linkifyTx`.
+7. **Register** — add a `GameEntry` to `GAMES` in `web/lib/games.ts` with `status: "live"`.
+8. **Verify** — `forge test` · `pnpm -r test` · `pnpm --filter @steamlink/web build` must all pass.
+
+### Open a pull request
+
+Push your branch and open a PR against `main`:
+
+```bash
+git push origin feat/<your-game>
+gh pr create --base main --title "feat: add <Your Game>" \
+  --body "New in-tree game. Deployed to Base Sepolia. One delegation, gasless moves, x402 entry."
+```
+
+Or from the compare view:
+**[github.com/Philotheephilix/SteamLink/compare](https://github.com/Philotheephilix/SteamLink/compare)**.
+Describe the game, link the deployed contract addresses, and confirm the PR checklist in the docs.
+**Never commit funded keys or `.env.local`** — they're gitignored, and a committed key is an automatic
+rejection.
 
 ## License
 
