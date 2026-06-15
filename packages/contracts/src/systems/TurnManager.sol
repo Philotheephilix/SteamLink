@@ -49,12 +49,23 @@ contract TurnManager is System {
     mapping(uint256 roomId => address[]) internal _seats;
     mapping(uint256 roomId => mapping(address player => uint256)) internal _seatIndexPlus1;
 
+    /// @notice Blocks of grace AFTER the deadline before a timeout-skip is allowed,
+    ///         so a player whose move lands a block or two late is not griefed out
+    ///         of their turn. (H5)
+    uint64 public constant TIMEOUT_GRACE = 30;
+
     error TurnManager_NotActive(uint256 roomId);
     error TurnManager_DeadlineNotPassed(uint256 roomId);
     error TurnManager_AlreadyActive(uint256 roomId);
     error TurnManager_EmptyOrder();
     error TurnManager_NotAdmin();
     error TurnManager_NotAuthorized();
+    /// @notice `turnBlocks` must be > 0, else every turn is instantly timeout-able. (H5)
+    error TurnManager_BadTurnBlocks();
+    /// @notice Only a SEATED participant of the room may report a timeout. (H5)
+    error TurnManager_NotParticipant(uint256 roomId, address reporter);
+    /// @notice The current seat is no longer in the seat set — the room cannot rotate. (H5)
+    error TurnManager_CurrentNotSeated(uint256 roomId);
 
     event TurnManager_Started(uint256 indexed roomId, address[] order, uint64 deadlineBlock);
     event TurnManager_Advanced(uint256 indexed roomId, address current, uint16 turnIndex, uint64 deadlineBlock);
@@ -118,6 +129,7 @@ contract TurnManager is System {
     // ── lifecycle ──
     function startTurns(uint256 roomId, address[] calldata order, uint64 turnBlocks) external onlyAuthorized {
         if (order.length == 0) revert TurnManager_EmptyOrder();
+        if (turnBlocks == 0) revert TurnManager_BadTurnBlocks();
         if (_turn[roomId].active) revert TurnManager_AlreadyActive(roomId);
 
         delete _seats[roomId];
@@ -153,18 +165,23 @@ contract TurnManager is System {
         emit TurnManager_DirectionSet(roomId, direction);
     }
 
-    /// @notice Permissionless AFK-skip. Gated purely by the on-chain deadline.
-    ///         Any caller may report once the deadline passes; the current seat is
-    ///         skipped and the turn rotates. NO funds move — this is a pure liveness
-    ///         mechanism with no slash/reward economics.
+    /// @notice AFK-skip, reportable only by a SEATED participant and only after a
+    ///         grace window past the deadline. Skips the current seat and rotates.
+    ///         NO funds move — a pure liveness mechanism. (H5)
+    /// @dev    The grace window stops an opponent from stealing a turn whose move is
+    ///         merely a block or two late; the participant gate stops a random
+    ///         external account from griefing every room.
     function timeout(uint256 roomId) external {
         Turn storage t = _turn[roomId];
         if (!t.active) revert TurnManager_NotActive(roomId);
-        if (block.number <= t.deadlineBlock) revert TurnManager_DeadlineNotPassed(roomId);
+        if (block.number <= uint256(t.deadlineBlock) + TIMEOUT_GRACE) {
+            revert TurnManager_DeadlineNotPassed(roomId);
+        }
+
+        address reporter = _reporter();
+        if (_seatIndexPlus1[roomId][reporter] == 0) revert TurnManager_NotParticipant(roomId, reporter);
 
         address skipped = t.current;
-        address reporter = _reporter();
-
         _rotate(roomId, t);
         emit TurnManager_TimedOut(roomId, skipped, reporter);
     }
@@ -172,7 +189,11 @@ contract TurnManager is System {
     function _rotate(uint256 roomId, Turn storage t) internal {
         address[] storage seats = _seats[roomId];
         uint256 n = seats.length;
-        uint256 idx = _seatIndexPlus1[roomId][t.current] - 1;
+        // Guard the `-1`: if `current` somehow isn't seated, fail loudly instead of
+        // underflowing and permanently bricking the room. (H5)
+        uint256 idxPlus1 = _seatIndexPlus1[roomId][t.current];
+        if (idxPlus1 == 0) revert TurnManager_CurrentNotSeated(roomId);
+        uint256 idx = idxPlus1 - 1;
         uint256 next;
         if (t.direction >= 0) {
             next = (idx + 1) % n;

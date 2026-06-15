@@ -78,6 +78,11 @@ contract NexusDelegationManager is IDelegationManager, ReentrancyGuard {
     /// @notice Only root authority (bytes32(0)) delegations are supported; delegation
     ///         chains are not implemented in this manager.
     error NonRootAuthorityUnsupported(bytes32 authority);
+    /// @notice A delegation with no caveats is rejected: the manager is deny-by-default,
+    ///         it never executes an unconstrained (caveat-less) action. (H3)
+    error NoCaveats();
+    /// @notice A caveat with a zero enforcer address is rejected (would no-op the guard). (H3)
+    error ZeroEnforcer();
 
     // ── replay guard: per-delegation redemption counter keyed on the EIP-712
     //    struct hash (same value returned by getDelegationHash) ──
@@ -205,10 +210,16 @@ contract NexusDelegationManager is IDelegationManager, ReentrancyGuard {
         }
         redemptionsOf[structHash] += 1;
 
-        // 3) run beforeHooks
+        // 3) run beforeHooks. DENY-BY-DEFAULT (H3): a caveat-less delegation is
+        //    rejected — the manager appends the delegator as the World's trusted
+        //    forwarder sender, so an unconstrained execution would be a signed
+        //    spoofing primitive. At least one caveat (e.g. a system allowlist or a
+        //    budget cap) must bound the action; a zero enforcer address is rejected.
         uint256 n = delegation.caveats.length;
+        if (n == 0) revert NoCaveats();
         for (uint256 j = 0; j < n; j++) {
             Caveat memory c = delegation.caveats[j];
+            if (c.enforcer == address(0)) revert ZeroEnforcer();
             ICaveatEnforcer(c.enforcer).beforeHook(
                 c.terms, c.args, mode, executionCalldata, structHash, delegation.delegator, redeemer
             );

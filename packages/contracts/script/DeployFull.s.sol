@@ -77,7 +77,10 @@ contract DeployFull is Script {
         //    charges. The deployer (the payer/relayer on anvil) is minted a balance.
         //    On Base Sepolia the TS suite ignores `testUsdc` and uses canonical USDC.
         TestUSDC testUsdc = new TestUSDC();
-        Pot pot = new Pot(IERC20(address(testUsdc)), msg.sender, msg.sender, 0);
+        // Pot(token, settleAuthority, rakeCollector, rakeBps, guardian, settleDelayBlocks, refundWindowBlocks).
+        // ⚠️ MAINNET: deploy settleAuthority and guardian as DISTINCT multisigs (see Pot natspec);
+        // the local devnet uses msg.sender for both for a self-contained demo.
+        Pot pot = new Pot(IERC20(address(testUsdc)), msg.sender, msg.sender, 0, msg.sender, 50, 100_000);
         testUsdc.mint(msg.sender, 1000e6);
 
         vm.stopBroadcast();

@@ -26,12 +26,12 @@ contract TimestampEnforcer is CaveatEnforcerBase {
     ) external view override {
         uint256 expiresAtMs = abi.decode(terms, (uint256));
         // The TS engine passes expiry in epoch MILLISECONDS (§2.1); the EVM clock
-        // (`block.timestamp`) is in SECONDS. We convert ms->s by integer division,
-        // which TRUNCATES sub-second precision: an expiry of 1_500ms is treated as
-        // 1s, so the effective expiry rounds DOWN to whole-second granularity.
-        // This is intentional and conservative (never extends the window); the unit
-        // stays ms at the input boundary so the rest of the stack speaks one unit.
+        // (`block.timestamp`) is in SECONDS. Convert ms->s by integer division,
+        // which TRUNCATES toward the earlier second (conservative — never extends
+        // the window). Expiry is EXCLUSIVE: redemption is rejected AT the expiry
+        // second too (`>=`), closing the sub-second over-grant where `>` left the
+        // whole boundary second redeemable past the intended ms expiry.
         uint256 expiresAtSec = expiresAtMs / 1000;
-        if (block.timestamp > expiresAtSec) revert DelegationExpired();
+        if (block.timestamp >= expiresAtSec) revert DelegationExpired();
     }
 }

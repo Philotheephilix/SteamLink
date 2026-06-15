@@ -13,6 +13,7 @@ import {MockERC20} from "./mocks/MockERC20.sol";
 import {NexusDelegationManager} from "../src/delegation/NexusDelegationManager.sol";
 import {Caveat, Delegation, ModeCode} from "../src/delegation/IDelegation.sol";
 import {MockSmartAccount} from "./mocks/MockSmartAccount.sol";
+import {PassEnforcer} from "./mocks/PassEnforcer.sol";
 
 /**
  * @notice LIVE redemption tests: a real EIP-712 signature (vm.sign over the
@@ -26,6 +27,7 @@ contract NexusDelegationManagerTest is Test {
     NexusDelegationManager internal manager;
     TurnBoundEnforcer internal turnBound;
     PerActionCapEnforcer internal capEnforcer;
+    PassEnforcer internal pass;
 
     bytes32 internal constant GAME_SYSTEM_ID = bytes32("CounterGame");
     uint256 internal constant ROOM = 1;
@@ -64,6 +66,7 @@ contract NexusDelegationManagerTest is Test {
 
         turnBound = new TurnBoundEnforcer();
         capEnforcer = new PerActionCapEnforcer();
+        pass = new PassEnforcer();
     }
 
     // ── helpers ──
@@ -86,8 +89,12 @@ contract NexusDelegationManagerTest is Test {
         return d;
     }
 
-    function _emptyCaveats() internal pure returns (Caveat[] memory) {
-        return new Caveat[](0);
+    /// @dev A single no-op caveat. The manager is deny-by-default (H3) and rejects
+    ///      caveat-less delegations, so "no real constraints" is modeled with one
+    ///      pass-through enforcer rather than an empty array.
+    function _emptyCaveats() internal view returns (Caveat[] memory caveats) {
+        caveats = new Caveat[](1);
+        caveats[0] = Caveat({enforcer: address(pass), terms: "", args: ""});
     }
 
     function _redeem(Delegation memory d, bytes memory exec) internal {

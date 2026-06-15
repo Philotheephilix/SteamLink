@@ -126,4 +126,26 @@ contract WorldTest is Test {
         vm.expectRevert(bytes("EchoSystem: boom"));
         world.call(SYSTEM_ID, abi.encodeWithSignature("boom()"));
     }
+
+    // ── H4: a locked system can never be re-pointed ──
+    function test_LockSystem_PreventsReplacement() public {
+        EchoSystem other = new EchoSystem();
+        world.lockSystem(SYSTEM_ID);
+        assertTrue(world.systemLocked(SYSTEM_ID));
+        vm.expectRevert(abi.encodeWithSelector(World.World_SystemIsLocked.selector, SYSTEM_ID));
+        world.registerSystem(SYSTEM_ID, address(other));
+        // original implementation is unchanged
+        assertEq(world.getSystemAddress(SYSTEM_ID), address(echo));
+    }
+
+    function test_LockSystem_UnknownReverts() public {
+        vm.expectRevert(abi.encodeWithSelector(World.World_SystemNotFound.selector, bytes32("ghost")));
+        world.lockSystem(bytes32("ghost"));
+    }
+
+    function test_LockSystem_OnlyOwner() public {
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, alice));
+        world.lockSystem(SYSTEM_ID);
+    }
 }

@@ -59,22 +59,49 @@ contract TurnManagerTest is Test {
         tm.timeout(1);
     }
 
-    function test_Timeout_AfterDeadline_SkipsWithoutMovingFunds() public {
+    function test_Timeout_AfterGrace_SkipsWithoutMovingFunds() public {
         tm.startTurns(1, _order(), TURN_BLOCKS);
 
-        // roll past deadline
-        vm.roll(block.number + TURN_BLOCKS + 1);
+        // roll past deadline + grace (H5)
+        vm.roll(block.number + TURN_BLOCKS + tm.TIMEOUT_GRACE() + 1);
 
-        // permissionless skip: rotates the turn, moves no funds, emits TimedOut.
+        // a SEATED participant (b) reports the AFK skip: rotates, moves no funds.
         vm.expectEmit(true, false, false, true, address(tm));
-        emit TurnManager.TurnManager_TimedOut(1, a, reporter);
-        vm.prank(reporter);
+        emit TurnManager.TurnManager_TimedOut(1, a, b);
+        vm.prank(b);
         tm.timeout(1);
 
         assertEq(tm.getCurrent(1), b); // skipped a -> b
 
         // no balance/ETH moved by the contract
         assertEq(address(tm).balance, 0);
+    }
+
+    // ── H5: within the grace window, a timeout is rejected ──
+    function test_Timeout_WithinGrace_Reverts() public {
+        tm.startTurns(1, _order(), TURN_BLOCKS);
+        // past the raw deadline but still inside the grace window
+        vm.roll(block.number + TURN_BLOCKS + 1);
+        vm.expectRevert(abi.encodeWithSelector(TurnManager.TurnManager_DeadlineNotPassed.selector, uint256(1)));
+        vm.prank(b);
+        tm.timeout(1);
+    }
+
+    // ── H5: a non-seated account cannot report a timeout ──
+    function test_Timeout_NonParticipant_Reverts() public {
+        tm.startTurns(1, _order(), TURN_BLOCKS);
+        vm.roll(block.number + TURN_BLOCKS + tm.TIMEOUT_GRACE() + 1);
+        vm.expectRevert(
+            abi.encodeWithSelector(TurnManager.TurnManager_NotParticipant.selector, uint256(1), reporter)
+        );
+        vm.prank(reporter); // 0x4E is not seated
+        tm.timeout(1);
+    }
+
+    // ── H5: turnBlocks == 0 is rejected (would be instantly timeout-able) ──
+    function test_StartTurns_ZeroTurnBlocks_Reverts() public {
+        vm.expectRevert(TurnManager.TurnManager_BadTurnBlocks.selector);
+        tm.startTurns(1, _order(), 0);
     }
 
     function test_Authorize_Gating() public {

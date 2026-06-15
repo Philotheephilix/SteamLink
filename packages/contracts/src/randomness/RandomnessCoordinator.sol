@@ -43,11 +43,52 @@ interface IRandomnessConsumer {
  *         (see the interface above) — left as a documented seam, not wired here,
  *         because VRF needs a funded subscription unavailable in CI.
  *
- * @dev    The coordinator is permissionless and stateless across requesters: every
- *         commit is bound to its `msg.sender` (the requester) and a monotonic
- *         requestId, so requests cannot be replayed or stolen between accounts.
+ * @dev    SECURITY (audit C3). The blockhash/prevrandao tiers are GRINDABLE by an
+ *         untrusted party who can choose whether to use an outcome (the committer
+ *         learns the result before deciding to reveal). To remove player-side
+ *         grinding, the randomness PRODUCERS (`requestCommit`, `fastRandom`) are
+ *         gated to AUTHORIZED callers — the game systems / relayer backend, which
+ *         is already the trusted driver of the game — NOT arbitrary players. A
+ *         player can therefore never request-and-grind their own roll. `reveal`
+ *         stays bound to the original requester.
+ *
+ *         For any payout-affecting roll the PRODUCTION path is the `vrf` tier
+ *         (Chainlink VRF v2.5, via {IRandomnessConsumer}); the commit-reveal/fast
+ *         tiers are for relayer-driven, non-adversarial use only.
  */
 contract RandomnessCoordinator {
+    // ─────────────────────────────────────────────────────────────────────────
+    // access control (C3): only authorized producers may request randomness
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// @notice Admin that manages the authorized-producer set.
+    address public admin;
+    /// @notice Accounts permitted to call `requestCommit` / `fastRandom`.
+    mapping(address producer => bool) public authorized;
+
+    error Randomness_NotAdmin();
+    error Randomness_NotAuthorized(address caller);
+
+    event Randomness_Authorized(address indexed producer, bool ok);
+
+    constructor(address _admin) {
+        admin = _admin;
+        authorized[_admin] = true;
+        emit Randomness_Authorized(_admin, true);
+    }
+
+    modifier onlyAuthorized() {
+        if (!authorized[msg.sender]) revert Randomness_NotAuthorized(msg.sender);
+        _;
+    }
+
+    /// @notice Grant/revoke a randomness producer (the game backend / relayer).
+    function authorize(address producer, bool ok) external {
+        if (msg.sender != admin) revert Randomness_NotAdmin();
+        authorized[producer] = ok;
+        emit Randomness_Authorized(producer, ok);
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // Tiers
     // ─────────────────────────────────────────────────────────────────────────
@@ -114,7 +155,7 @@ contract RandomnessCoordinator {
      * @param commitment `keccak256(abi.encodePacked(secret))` for a 32-byte secret.
      * @return requestId Identifier to pass to `reveal`.
      */
-    function requestCommit(bytes32 commitment) external returns (uint256 requestId) {
+    function requestCommit(bytes32 commitment) external onlyAuthorized returns (uint256 requestId) {
         requestId = nextRequestId++;
         commitments[requestId] = Commitment({
             requester: msg.sender,
@@ -166,7 +207,7 @@ contract RandomnessCoordinator {
      *         profits from biasing the outcome (use `commit-reveal` or `vrf` there).
      * @return randomWord `keccak256(block.prevrandao, block.timestamp, requester, nonce)`.
      */
-    function fastRandom() external returns (uint256 randomWord) {
+    function fastRandom() external onlyAuthorized returns (uint256 randomWord) {
         uint256 nonce = fastNonce[msg.sender]++;
         randomWord = uint256(keccak256(abi.encodePacked(block.prevrandao, block.timestamp, msg.sender, nonce)));
         emit FastRandom(msg.sender, nonce, randomWord);

@@ -49,11 +49,18 @@ contract World is IWorld, ReentrancyGuard, Ownable2Step {
     error World_AccessDenied(bytes32 tableId, address caller);
     error World_RecordNotFound(bytes32 tableId);
     error World_ZeroSystemAddress();
+    /// @notice A locked system implementation can never be re-pointed. (H4)
+    error World_SystemIsLocked(bytes32 systemId);
+
+    // ── system-registry freeze (H4): once a systemId is locked, its implementation
+    //    is immutable — the owner can no longer hot-swap it mid-game. ──
+    mapping(bytes32 systemId => bool) public systemLocked;
 
     // ── admin events ──
     event World_TrustedForwarderSet(address indexed forwarder);
     event World_WriteAccessGranted(bytes32 indexed tableId, address indexed writer);
     event World_WriteAccessRevoked(bytes32 indexed tableId, address indexed writer);
+    event World_SystemLocked(bytes32 indexed systemId);
 
     constructor() Ownable(msg.sender) {
         emit World_HelloWorld(WORLD_VERSION);
@@ -102,10 +109,22 @@ contract World is IWorld, ReentrancyGuard, Ownable2Step {
     /// @dev    System-call AUTHORIZATION is NOT enforced here: every registered
     ///         system is routable via `call`. Per-action access control is enforced
     ///         at the delegation/enforcer layer (caveats), not by the registry.
+    ///         A LOCKED systemId (see `lockSystem`) can no longer be re-pointed. (H4)
     function registerSystem(bytes32 systemId, address systemAddr) external onlyOwner {
         if (systemAddr == address(0)) revert World_ZeroSystemAddress();
+        if (systemLocked[systemId]) revert World_SystemIsLocked(systemId);
         _systems[systemId] = systemAddr;
         emit World_SystemRegistered(systemId, systemAddr);
+    }
+
+    /// @notice Permanently freeze a system implementation so the owner can never
+    ///         hot-swap it. Call this on every game system before opening a pot so
+    ///         a compromised owner key cannot repoint a system at malicious logic
+    ///         mid-game. One-way; there is no unlock. (H4)
+    function lockSystem(bytes32 systemId) external onlyOwner {
+        if (_systems[systemId] == address(0)) revert World_SystemNotFound(systemId);
+        systemLocked[systemId] = true;
+        emit World_SystemLocked(systemId);
     }
 
     function getSystemAddress(bytes32 systemId) external view returns (address) {

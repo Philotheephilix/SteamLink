@@ -40,9 +40,9 @@ contract BudgetEnforcersTest is Test {
         bytes memory terms = abi.encode(address(token), uint256(100));
 
         e.beforeHook(terms, "", MODE, _execTransfer(address(token), bob, 40), dh, alice, address(0));
-        assertEq(e.spentMap(dh), 40);
+        assertEq(e.spentMap(address(this), dh), 40);
         e.beforeHook(terms, "", MODE, _execTransfer(address(token), bob, 50), dh, alice, address(0));
-        assertEq(e.spentMap(dh), 90);
+        assertEq(e.spentMap(address(this), dh), 90);
     }
 
     function test_ERC20TransferAmount_RevertsOverLifetimeCap() public {
@@ -52,13 +52,13 @@ contract BudgetEnforcersTest is Test {
 
         e.beforeHook(terms, "", MODE, _execTransfer(address(token), bob, 60), dh, alice, address(0));
         e.beforeHook(terms, "", MODE, _execTransfer(address(token), bob, 30), dh, alice, address(0));
-        assertEq(e.spentMap(dh), 90);
+        assertEq(e.spentMap(address(this), dh), 90);
 
         // this redemption (90 + 20 = 110) pushes cumulative over the cap of 100
         vm.expectRevert(ERC20TransferAmountEnforcer.ERC20TransferAmountExceeded.selector);
         e.beforeHook(terms, "", MODE, _execTransfer(address(token), bob, 20), dh, alice, address(0));
         // state unchanged after revert
-        assertEq(e.spentMap(dh), 90);
+        assertEq(e.spentMap(address(this), dh), 90);
     }
 
     function test_ERC20TransferAmount_IsolatedPerDelegationHash() public {
@@ -69,8 +69,8 @@ contract BudgetEnforcersTest is Test {
 
         e.beforeHook(terms, "", MODE, _execTransfer(address(token), bob, 90), d1, alice, address(0));
         e.beforeHook(terms, "", MODE, _execTransfer(address(token), bob, 90), d2, alice, address(0));
-        assertEq(e.spentMap(d1), 90);
-        assertEq(e.spentMap(d2), 90);
+        assertEq(e.spentMap(address(this), d1), 90);
+        assertEq(e.spentMap(address(this), d2), 90);
     }
 
     function test_ERC20TransferAmount_AcceptsTransferFrom() public {
@@ -78,7 +78,7 @@ contract BudgetEnforcersTest is Test {
         bytes32 dh = bytes32("budget-tf");
         bytes memory terms = abi.encode(address(token), uint256(100));
         e.beforeHook(terms, "", MODE, _execTransferFrom(address(token), alice, bob, 50), dh, alice, address(0));
-        assertEq(e.spentMap(dh), 50);
+        assertEq(e.spentMap(address(this), dh), 50);
     }
 
     function test_ERC20TransferAmount_RejectsWrongToken() public {
@@ -122,13 +122,14 @@ contract BudgetEnforcersTest is Test {
         allowed[0] = bob; // bob is the allowed recipient (`to`)
         bytes memory terms = abi.encode(address(token), allowed);
 
-        // transferFrom(carol -> bob): `to` (2nd arg) is bob → allowed
-        e.beforeHook(terms, "", MODE, _execTransferFrom(address(token), carol, bob, 10), bytes32(0), alice, address(0));
+        // transferFrom(carol -> bob): `to` (2nd arg) is bob → allowed.
+        // delegator MUST equal `from` (H1), so carol is the delegator here.
+        e.beforeHook(terms, "", MODE, _execTransferFrom(address(token), carol, bob, 10), bytes32(0), carol, address(0));
 
         // transferFrom(bob -> carol): `to` (2nd arg) is carol → not allowed,
-        // even though bob (the `from`/1st arg) is on the allowlist
+        // even though bob (the `from`/1st arg, = delegator) is on the allowlist
         vm.expectRevert(AllowedRecipientsEnforcer.RecipientNotAllowed.selector);
-        e.beforeHook(terms, "", MODE, _execTransferFrom(address(token), bob, carol, 10), bytes32(0), alice, address(0));
+        e.beforeHook(terms, "", MODE, _execTransferFrom(address(token), bob, carol, 10), bytes32(0), bob, address(0));
     }
 
     function test_AllowedRecipients_RejectsWrongToken() public {
@@ -149,5 +150,38 @@ contract BudgetEnforcersTest is Test {
         bytes memory exec = abi.encodePacked(address(token), uint256(0), approve);
         vm.expectRevert(AllowedRecipientsEnforcer.RecipientNotAllowed.selector);
         e.beforeHook(terms, "", MODE, exec, bytes32(0), alice, address(0));
+    }
+
+    // ── H1: lifetime cap pins transferFrom `from` to the delegator ──
+    function test_ERC20TransferAmount_RejectsTransferFromOtherPayer() public {
+        ERC20TransferAmountEnforcer e = new ERC20TransferAmountEnforcer();
+        bytes memory terms = abi.encode(address(token), uint256(1000));
+        // delegator is alice, but the transferFrom pulls bob's funds → reject
+        vm.expectRevert(ERC20TransferAmountEnforcer.TransferFromNotDelegator.selector);
+        e.beforeHook(terms, "", MODE, _execTransferFrom(address(token), bob, carol, 10), bytes32("x"), alice, address(0));
+    }
+
+    function test_AllowedRecipients_RejectsTransferFromOtherPayer() public {
+        AllowedRecipientsEnforcer e = new AllowedRecipientsEnforcer();
+        address[] memory allowed = new address[](1);
+        allowed[0] = carol;
+        bytes memory terms = abi.encode(address(token), allowed);
+        // recipient carol is allowed, but `from` (bob) != delegator (alice) → reject
+        vm.expectRevert(AllowedRecipientsEnforcer.TransferFromNotDelegator.selector);
+        e.beforeHook(terms, "", MODE, _execTransferFrom(address(token), bob, carol, 10), bytes32(0), alice, address(0));
+    }
+
+    // ── C1: a direct griefer cannot inflate the manager's cumulative spend ──
+    function test_ERC20TransferAmount_GrieferCannotDoSManagerSpend() public {
+        ERC20TransferAmountEnforcer e = new ERC20TransferAmountEnforcer();
+        bytes32 victimHash = bytes32("victim");
+        bytes memory terms = abi.encode(address(token), uint256(100));
+
+        vm.prank(address(0xBAD));
+        e.beforeHook(terms, "", MODE, _execTransfer(address(token), bob, 100), victimHash, alice, address(0));
+
+        // The manager's (this contract's) namespace is untouched.
+        assertEq(e.spentMap(address(this), victimHash), 0);
+        assertEq(e.spentMap(address(0xBAD), victimHash), 100);
     }
 }

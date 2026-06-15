@@ -120,7 +120,7 @@ contract EnforcersTest is Test {
         e.beforeHook(terms, "", MODE, "", dh, address(0), address(0)); // 2
         vm.expectRevert(LimitedCallsEnforcer.ActionLimitReached.selector);
         e.beforeHook(terms, "", MODE, "", dh, address(0), address(0)); // 3 → revert
-        assertEq(e.callsUsed(dh), 2);
+        assertEq(e.callsUsed(address(this), dh), 2);
     }
 
     function test_LimitedCalls_IsolatedPerDelegationHash() public {
@@ -129,8 +129,8 @@ contract EnforcersTest is Test {
         e.beforeHook(terms, "", MODE, "", bytes32("d1"), address(0), address(0));
         // a different delegation hash has its own counter
         e.beforeHook(terms, "", MODE, "", bytes32("d2"), address(0), address(0));
-        assertEq(e.callsUsed(bytes32("d1")), 1);
-        assertEq(e.callsUsed(bytes32("d2")), 1);
+        assertEq(e.callsUsed(address(this), bytes32("d1")), 1);
+        assertEq(e.callsUsed(address(this), bytes32("d2")), 1);
     }
 
     // ── PerActionCapEnforcer ──
@@ -159,7 +159,8 @@ contract EnforcersTest is Test {
         bytes memory terms = abi.encode(token, uint256(100));
         bytes memory tf = abi.encodeWithSignature("transferFrom(address,address,uint256)", alice, bob, uint256(50));
         bytes memory exec = _exec(token, 0, tf);
-        e.beforeHook(terms, "", MODE, exec, bytes32(0), address(0), address(0));
+        // delegator MUST equal the transferFrom `from` (H1): alice pulls alice's funds
+        e.beforeHook(terms, "", MODE, exec, bytes32(0), alice, address(0));
     }
 
     function test_PerActionCap_RejectsWrongToken() public {
@@ -193,5 +194,34 @@ contract EnforcersTest is Test {
         } else {
             e.beforeHook(terms, "", MODE, exec, bytes32(0), address(0), address(0));
         }
+    }
+
+    // ── C1: a direct griefer cannot inflate the manager's counter ──
+    function test_LimitedCalls_GrieferCannotDoSManagerCounter() public {
+        LimitedCallsEnforcer e = new LimitedCallsEnforcer();
+        bytes32 victimHash = bytes32("victim-delegation");
+        bytes memory terms = abi.encode(uint256(1)); // maxActions = 1
+
+        // A griefer maxes out the cap for the victim's PUBLIC delegationHash —
+        // but in the griefer's OWN (msg.sender) namespace.
+        vm.prank(address(0xBAD));
+        e.beforeHook(terms, "", MODE, "", victimHash, address(0), address(0));
+
+        // The real manager (this contract) still has a fresh, usable counter.
+        e.beforeHook(terms, "", MODE, "", victimHash, address(0), address(0));
+        assertEq(e.callsUsed(address(this), victimHash), 1);
+        assertEq(e.callsUsed(address(0xBAD), victimHash), 1);
+    }
+
+    // ── H1: per-action cap pins transferFrom `from` to the delegator ──
+    function test_PerActionCap_RejectsTransferFromOtherPayer() public {
+        PerActionCapEnforcer e = new PerActionCapEnforcer();
+        address token = address(0x70CE2);
+        bytes memory terms = abi.encode(token, uint256(100));
+        // pulls from bob, but the delegator is alice → reject
+        bytes memory tf = abi.encodeWithSignature("transferFrom(address,address,uint256)", bob, alice, uint256(10));
+        bytes memory exec = _exec(token, 0, tf);
+        vm.expectRevert(PerActionCapEnforcer.TransferFromNotDelegator.selector);
+        e.beforeHook(terms, "", MODE, exec, bytes32(0), alice, address(0));
     }
 }

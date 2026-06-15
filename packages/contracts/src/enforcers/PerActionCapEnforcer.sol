@@ -17,6 +17,8 @@ contract PerActionCapEnforcer is CaveatEnforcerBase {
     /// @notice Reverts when the single-execution transfer exceeds the per-action cap
     ///         (or the call is not a transfer of the budget token).
     error PerActionCapExceeded();
+    /// @notice Reverts when a `transferFrom` would pull from someone other than the delegator.
+    error TransferFromNotDelegator();
 
     bytes4 internal constant TRANSFER_SELECTOR = 0xa9059cbb; // transfer(address,uint256)
     bytes4 internal constant TRANSFER_FROM_SELECTOR = 0x23b872dd; // transferFrom(address,address,uint256)
@@ -27,7 +29,7 @@ contract PerActionCapEnforcer is CaveatEnforcerBase {
         ModeCode,
         bytes calldata executionCalldata,
         bytes32,
-        address,
+        address delegator,
         address
     ) external pure override {
         (address token, uint256 perActionCap) = abi.decode(terms, (address, uint256));
@@ -43,8 +45,10 @@ contract PerActionCapEnforcer is CaveatEnforcerBase {
             if (callData.length < 4 + 64) revert PerActionCapExceeded();
             amount = uint256(bytes32(callData[36:68]));
         } else if (sel == TRANSFER_FROM_SELECTOR) {
-            // transferFrom(address from, address to, uint256 amount): amount is 3rd arg
+            // transferFrom(address from, address to, uint256 amount): from=1st, amount=3rd
             if (callData.length < 4 + 96) revert PerActionCapExceeded();
+            address from = address(uint160(uint256(bytes32(callData[4:36]))));
+            if (from != delegator) revert TransferFromNotDelegator();
             amount = uint256(bytes32(callData[68:100]));
         } else {
             revert PerActionCapExceeded();

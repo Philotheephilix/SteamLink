@@ -4,6 +4,7 @@ pragma solidity ^0.8.23;
 import {Test} from "forge-std/Test.sol";
 import {NexusDelegationManager} from "../src/delegation/NexusDelegationManager.sol";
 import {Caveat, Delegation, ModeCode} from "../src/delegation/IDelegation.sol";
+import {PassEnforcer} from "./mocks/PassEnforcer.sol";
 
 /**
  * @notice A malicious execution target that re-enters redeemDelegations on call.
@@ -44,6 +45,7 @@ contract ReentrantTarget {
 
 contract ManagerHardeningTest is Test {
     NexusDelegationManager internal manager;
+    PassEnforcer internal pass;
 
     uint256 internal alicePk = 0xA11CE;
     address internal alice;
@@ -52,6 +54,7 @@ contract ManagerHardeningTest is Test {
     function setUp() public {
         alice = vm.addr(alicePk);
         manager = new NexusDelegationManager();
+        pass = new PassEnforcer();
     }
 
     function _signed(Delegation memory d, uint256 pk) internal view returns (Delegation memory) {
@@ -62,11 +65,15 @@ contract ManagerHardeningTest is Test {
     }
 
     function _delegation(address delegate, uint256 salt) internal view returns (Delegation memory) {
+        // One no-op caveat: the manager is deny-by-default (H3) and rejects
+        // caveat-less delegations, so model "no real constraints" with a pass-through.
+        Caveat[] memory caveats = new Caveat[](1);
+        caveats[0] = Caveat({enforcer: address(pass), terms: "", args: ""});
         Delegation memory d = Delegation({
             delegate: delegate,
             delegator: alice,
             authority: bytes32(0),
-            caveats: new Caveat[](0),
+            caveats: caveats,
             salt: salt,
             maxRedemptions: 1,
             signature: ""
@@ -139,6 +146,24 @@ contract ManagerHardeningTest is Test {
 
         vm.prank(relayer);
         vm.expectRevert(NexusDelegationManager.NonZeroValueUnsupported.selector);
+        _redeem(d, exec);
+    }
+
+    // ── H3: deny-by-default — a caveat-less delegation is rejected ──
+    function test_NoCaveats_Reverts() public {
+        Delegation memory d = Delegation({
+            delegate: relayer,
+            delegator: alice,
+            authority: bytes32(0),
+            caveats: new Caveat[](0),
+            salt: 99,
+            maxRedemptions: 1,
+            signature: ""
+        });
+        d = _signed(d, alicePk);
+        bytes memory exec = _exec(address(0xCAFE), 0, hex"");
+        vm.prank(relayer);
+        vm.expectRevert(NexusDelegationManager.NoCaveats.selector);
         _redeem(d, exec);
     }
 }

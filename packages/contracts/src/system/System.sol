@@ -60,12 +60,14 @@ abstract contract System {
         _;
     }
 
-    /// @dev The address `onlyWorld` checks against. Defaults to the configured
-    ///      `trustedRouter` (the World). Falls back to msg.sender only when no
-    ///      router has been wired (e.g. lightweight test systems).
+    /// @dev The address `onlyWorld` checks against — always the configured
+    ///      `trustedRouter`. FAIL-CLOSED: there is no msg.sender fallback. Until
+    ///      the router is wired (`trustedRouter == address(0)`), `onlyWorld`
+    ///      rejects EVERY caller (msg.sender can never equal address(0)), so an
+    ///      unwired/partially-deployed system can never be driven directly as a
+    ///      spoofable sender. (Audit: System fail-closed.)
     function _worldAddress() internal view virtual returns (address) {
-        address router = trustedRouter;
-        return router == address(0) ? msg.sender : router;
+        return trustedRouter;
     }
 
     // ── typed table helpers — proxy to the World's Store (access-controlled) ──

@@ -11,9 +11,27 @@ contract RandomnessTest is Test {
     address internal bob = address(0xB0B);
 
     function setUp() public {
-        rng = new RandomnessCoordinator();
+        // this test contract is admin; authorize the producer accounts used below
+        rng = new RandomnessCoordinator(address(this));
+        rng.authorize(alice, true);
+        rng.authorize(bob, true);
         // Roll forward so blockhash(commitBlock) is non-zero in tests.
         vm.roll(100);
+    }
+
+    // ── C3: an unauthorized account cannot produce randomness (no grinding) ──
+    function test_RequestCommit_Unauthorized_Reverts() public {
+        address stranger = address(0xBAD);
+        vm.prank(stranger);
+        vm.expectRevert(abi.encodeWithSelector(RandomnessCoordinator.Randomness_NotAuthorized.selector, stranger));
+        rng.requestCommit(keccak256("x"));
+    }
+
+    function test_FastRandom_Unauthorized_Reverts() public {
+        address stranger = address(0xBAD);
+        vm.prank(stranger);
+        vm.expectRevert(abi.encodeWithSelector(RandomnessCoordinator.Randomness_NotAuthorized.selector, stranger));
+        rng.fastRandom();
     }
 
     // ── commit-reveal happy path: word is deterministic from inputs ──
