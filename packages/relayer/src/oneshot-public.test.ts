@@ -1,13 +1,13 @@
 import { NexusError } from "@nexus/types";
+import type { Address } from "@nexus/types";
 import { describe, expect, it, vi } from "vitest";
 import {
+  ONESHOT_PUBLIC_RELAYER_TESTNET,
   OneShotPublicRelayer,
   RELAY_STATUS,
   mapStatus,
-  ONESHOT_PUBLIC_RELAYER_TESTNET,
 } from "./oneshot-public.js";
 import type { FetchImpl, RelayStatusResult } from "./oneshot-public.js";
-import type { Address } from "@nexus/types";
 import type { Bundle, RelayDelegation, StatusEvent } from "./port.js";
 
 const TARGET = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -33,9 +33,10 @@ function capsResult(chainId = "84532") {
  * `method`, and returns `{ jsonrpc, id, result|error }`. Routes are keyed by RPC
  * method name; each handler receives the params array.
  */
-function rpcFetch(
-  routes: Record<string, (params: unknown[]) => unknown>,
-): { impl: FetchImpl; calls: { method: string; params: unknown[] }[] } {
+function rpcFetch(routes: Record<string, (params: unknown[]) => unknown>): {
+  impl: FetchImpl;
+  calls: { method: string; params: unknown[] }[];
+} {
   const calls: { method: string; params: unknown[] }[] = [];
   const impl: FetchImpl = async (_url, init) => {
     const req = JSON.parse(init?.body ?? "{}") as { id: number; method: string; params: unknown[] };
@@ -135,7 +136,7 @@ describe("OneShotPublicRelayer.getFeeData", () => {
       gasPrice: "0x1",
       feeCollector: FEE,
       targetAddress: TARGET,
-      context: "{\"quote\":\"signed\"}",
+      context: '{"quote":"signed"}',
     };
     const { impl, calls } = rpcFetch({ relayer_getFeeData: () => fee });
     const out = await relayer(impl).getFeeData(USDC);
@@ -173,7 +174,9 @@ describe("OneShotPublicRelayer.submitBundle", () => {
       moveBundle({ encodedTxns: [{ to: POT, data: "0x", value: 255n }] }),
     );
     const send = calls.find((c) => c.method === "relayer_send7710Transaction")!;
-    const tx = ((send.params as [Record<string, unknown>])[0].transactions as Record<string, unknown>[])[0]!;
+    const tx = (
+      (send.params as [Record<string, unknown>])[0].transactions as Record<string, unknown>[]
+    )[0]!;
     expect((tx.executions as Record<string, unknown>[])[0]!.value).toBe("0xff");
   });
 
@@ -203,7 +206,9 @@ describe("OneShotPublicRelayer.submitBundle", () => {
     });
     await relayer(impl, { destinationUrl: "https://app.test/hook" }).submitBundle(moveBundle());
     const sent = calls.find((c) => c.method === "relayer_send7710Transaction")!;
-    expect((sent.params as [Record<string, unknown>])[0].destinationUrl).toBe("https://app.test/hook");
+    expect((sent.params as [Record<string, unknown>])[0].destinationUrl).toBe(
+      "https://app.test/hook",
+    );
     expect(status).not.toHaveBeenCalled();
   });
 
@@ -321,8 +326,13 @@ describe("OneShotPublicRelayer.upgradeEOA", () => {
 
 describe("OneShotPublicRelayer config", () => {
   it("requires a chainId", () => {
-    expect(() => new OneShotPublicRelayer({ chainId: "", fetchImpl: (async () => jsonRes({})) as FetchImpl }))
-      .toThrow(NexusError);
+    expect(
+      () =>
+        new OneShotPublicRelayer({
+          chainId: "",
+          fetchImpl: (async () => jsonRes({})) as FetchImpl,
+        }),
+    ).toThrow(NexusError);
   });
 });
 
