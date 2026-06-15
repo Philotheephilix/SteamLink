@@ -34,7 +34,9 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-      - run: pnpm install --frozen-lockfile
+      # strictDepBuilds=false: pnpm 11 otherwise HARD-FAILS a fresh install on any
+      # ignored dependency build script (ERR_PNPM_IGNORED_BUILDS); downgrade to a warning.
+      - run: pnpm install --frozen-lockfile --config.strictDepBuilds=false
       # TS packages only (the contracts package is built/tested in the `contracts` job via forge).
       - run: pnpm -r --filter '!@nexus/contracts' build
       - run: pnpm -r --filter '!@nexus/contracts' test
@@ -56,7 +58,9 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-      - run: pnpm install --frozen-lockfile
+      # strictDepBuilds=false: pnpm 11 otherwise HARD-FAILS a fresh install on any
+      # ignored dependency build script (ERR_PNPM_IGNORED_BUILDS); downgrade to a warning.
+      - run: pnpm install --frozen-lockfile --config.strictDepBuilds=false
       - run: pnpm build
       - name: Run the live zero-mock suite against a local anvil chain
         run: pnpm --filter @nexus/scripts exec tsx live/local-integration.ts
