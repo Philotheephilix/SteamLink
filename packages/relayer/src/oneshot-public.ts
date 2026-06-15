@@ -208,7 +208,10 @@ export class OneShotPublicRelayer implements RelayerAdapter {
       ]);
     } catch (err) {
       if (err instanceof NexusError)
-        throw new NexusError("CAPABILITIES_UNAVAILABLE", err.message, { cause: err, retryable: true });
+        throw new NexusError("CAPABILITIES_UNAVAILABLE", err.message, {
+          cause: err,
+          retryable: true,
+        });
       throw err;
     }
     const entry = raw?.[this.chainId];
