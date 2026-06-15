@@ -50,12 +50,20 @@ export function PageShell({
 
           <ModeToggle mode={mode} onSwitch={onSwitch} />
 
-          <a
-            href={cta.href}
-            className="sticker sticker-lift sticker-press shrink-0 rounded-full bg-ink px-4 py-2 text-sm font-bold text-paper"
-          >
-            {cta.label}
-          </a>
+          <div className="flex shrink-0 items-center gap-2">
+            <Link
+              href="/docs"
+              className="hidden rounded-full border-[2.5px] border-ink bg-paper px-3.5 py-1.5 text-sm font-bold text-ink shadow-sticker-sm transition-transform hover:-translate-y-0.5 sm:inline-block"
+            >
+              Docs
+            </Link>
+            <a
+              href={cta.href}
+              className="sticker sticker-lift sticker-press rounded-full bg-ink px-4 py-2 text-sm font-bold text-paper"
+            >
+              {cta.label}
+            </a>
+          </div>
         </nav>
       </header>
 
