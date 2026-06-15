@@ -111,6 +111,8 @@ export class UnoGame {
 
   private nextIndex(from: number, step = 1): number {
     const n = this.seats.length;
+    // Double-mod keeps the index in [0, n) even when direction is -1 and the raw
+    // sum goes negative (JS `%` returns a negative remainder for negative operands).
     return (((from + this.direction * step) % n) + n) % n;
   }
 
@@ -162,6 +164,8 @@ export class UnoGame {
    */
   play(seat: Address, card: UnoCard, chosenColor?: number): PlayedEffect {
     const me = seat.toLowerCase() as Address;
+    // Re-validate at commit time: validatePlay is pure, so re-running it here makes
+    // play() safe to call directly and re-derives the authoritative hand index.
     const idx = this.validatePlay(seat, card);
     const hand = this.handOf(me);
     const played = hand.splice(idx, 1)[0];

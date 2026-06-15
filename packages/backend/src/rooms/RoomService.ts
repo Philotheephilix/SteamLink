@@ -13,6 +13,9 @@ interface RoomRecord {
   members: Address[];
 }
 
+// Process-global monotonic counters mint human-readable ids (`room-N`/`sess-N`).
+// Module-level (not per-instance) so ids stay unique even if multiple RoomService
+// instances are constructed in the same process (e.g. tests, serverless reuse).
 let roomSeq = 0;
 let sessionSeq = 0;
 
@@ -82,6 +85,9 @@ export class RoomService {
     await this.deps.store.put(session);
 
     if (!room.members.includes(delegation.player)) room.members.push(delegation.player);
+    // Two-step advance in one join: the first member moves open→filling, and the
+    // member that reaches quorum moves filling→active in the same call (so a
+    // single-quorum room becomes active on its first join).
     if (room.state === "open") room.state = transition(room.state, "fill");
     if (room.state === "filling" && room.members.length >= room.config.quorum) {
       room.state = transition(room.state, "quorum");

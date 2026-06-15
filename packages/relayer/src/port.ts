@@ -98,8 +98,14 @@ export interface BundleHandle {
   txHash?: Hex;
 }
 
+/**
+ * Bundle lifecycle status. `pending` is non-terminal (submitted, not yet on-chain);
+ * `mined` and `failed` are terminal. The hot path resolves on the terminal events
+ * delivered via {@link RelayerAdapter.onStatus} (webhook-driven for OneShot).
+ */
 export type BundleStatus = "pending" | "mined" | "failed";
 
+/** A terminal (or progress) status update for one bundle, keyed by `bundleId`. */
 export interface StatusEvent {
   bundleId: string;
   status: BundleStatus;

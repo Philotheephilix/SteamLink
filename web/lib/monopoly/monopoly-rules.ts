@@ -447,6 +447,8 @@ export class MonopolyRules {
         this.pending = { kind: "end" };
         break;
       case "moveTo": {
+        // An advance to a LOWER board index means we looped past GO (e.g. Advance
+        // to GO/Reading from the far side), so award the GO bonus if the card allows.
         const passed = e.pos < p.position && e.collectGo;
         p.position = e.pos;
         if (passed) {
@@ -706,6 +708,8 @@ export class MonopolyRules {
       const idx = (this.turnIndex + i) % n;
       const cand = this.player(this.order[idx])!;
       if (!cand.bankrupt) {
+        // The next solvent seat sits at or before the current index → we wrapped
+        // past the end of the order array, so a full round has elapsed.
         if (idx <= this.turnIndex) this.round++; // wrapped → new round
         this.turnIndex = idx;
         // round-cap safety net

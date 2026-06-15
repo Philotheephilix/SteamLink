@@ -21,7 +21,10 @@ const ERC20_TRANSFER_ABI = [
   },
 ] as const;
 
-const DECIMALS = 6n;
+const DECIMALS = 6n; // USDC has 6 decimals
+// Convert a human USDC string ("1.5") to base units (1_500_000n). The fractional
+// part is right-padded then TRUNCATED to 6 digits (extra precision is dropped, not
+// rounded), so values are never rounded up into more than the payer authorized.
 function usdcToUnits(human: string): bigint {
   const [whole, frac = ""] = human.split(".");
   const padded = `${frac}000000`.slice(0, Number(DECIMALS));

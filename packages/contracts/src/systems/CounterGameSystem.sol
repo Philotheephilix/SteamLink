@@ -33,6 +33,7 @@ contract CounterGameSystem is System {
         admin = msg.sender;
     }
 
+    /// @notice Wire the World as this system's trusted redemption router (admin-only).
     /// @dev Wire the trusted router (the World) once, after both are deployed. The
     ///      World is deployed before the game, so it cannot be passed in the ctor.
     function setTrustedRouter(address router) external {

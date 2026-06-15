@@ -147,6 +147,8 @@ export function routeHealthz(): RouteResult {
 }
 
 export async function routeReadyz(backend: Backend): Promise<RouteResult> {
+  // Duck-type the indexer's optional `ready` flag: adapters that don't expose one
+  // are treated as ready (() => true) rather than blocking readiness checks.
   const indexerReady =
     "ready" in backend.indexer &&
     typeof (backend.indexer as { ready?: unknown }).ready === "boolean"

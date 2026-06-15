@@ -1,3 +1,18 @@
+/**
+ * ROLE: the client-side `random.*` facade (design §9, phase-09). Pure, stateless
+ * builders that turn a randomness request into calldata for the on-chain
+ * `RandomnessCoordinator` (sent via the relayer like any other move) plus the
+ * pure `dice` mapper.
+ *
+ * KEY INVARIANT: every off-chain computation here must mirror the contract
+ * bit-for-bit — `commitmentFor` matches the contract's `reveal` check and `dice`
+ * replicates the contract's rejection sampling exactly — so the SDK can preview a
+ * draw and have it equal the eventual on-chain result. The `vrf` tier is a
+ * documented type-level seam only (no oracle wiring; see NOTE on `random`).
+ *
+ * This module IS the public surface (the `random` const), so it lives in
+ * index.ts rather than re-exporting from a sibling.
+ */
 import type { Hex } from "@nexus/types";
 import { encodeFunctionData, encodePacked, keccak256 } from "viem";
 import type { CommitRevealOpts, RandomnessCall, RngTier } from "./types.js";
@@ -117,6 +132,9 @@ export function dice(randomWord: bigint, sides: number, count: number): number[]
   const rolls: number[] = [];
   for (let i = 0; i < count; i++) {
     let draw = BigInt(keccak256(encodePacked(["uint256", "uint256"], [randomWord, BigInt(i)])));
+    // On a biased-tail rejection we cannot reuse `draw` (it would loop forever on
+    // the same value) nor advance `i` (that would collide with the next die), so
+    // we re-hash with an incrementing `salt` — matching the contract's retry.
     let salt = 0n;
     while (draw >= limit) {
       salt += 1n;

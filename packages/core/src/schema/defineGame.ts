@@ -37,6 +37,9 @@ const NAME_RE = /^[a-z][a-z0-9_-]*$/;
  * Define a game. Validates the schema eagerly so misconfiguration fails at
  * call time (and, via the type parameters, at compile time).
  */
+// The `const` type-parameter modifiers preserve the literal table/system NAMES
+// (not widened to `string`) so downstream `TableNames`/`SystemNames` can offer
+// compile-time-checked keys — this is what makes a misspelled table a type error.
 export function defineGame<
   const TTables extends Record<string, TableSchema>,
   const TSystems extends Record<string, string>,

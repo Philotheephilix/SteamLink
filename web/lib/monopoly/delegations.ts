@@ -22,6 +22,8 @@ const CHAIN_ID = 84532;
 const GAMEPLAY_MAX_ACTIONS = 400;
 const GAMEPLAY_MAX_REDEMPTIONS = 400n;
 
+// Per-delegation salt: timestamp XOR the address prefix makes each signed delegation
+// unique (distinct delegation hash) even if the same player signs twice in one ms.
 function saltFor(addr: Address): bigint {
   return BigInt(Date.now()) ^ BigInt(`0x${addr.slice(2, 10)}`);
 }

@@ -95,6 +95,12 @@ export const MANAGER_ABI = [
 const SINGLE_EXECUTION_MODE = pad("0x00", { size: 32 }) as Hex;
 
 // ── caveat builders ───────────────────────────────────────────────────────
+//
+// Each `terms*` helper ABI-encodes the bytes a specific enforcer expects in its
+// `terms` field. The layout per helper is the contract's `abi.decode(terms, ...)`
+// shape: get the parameter list or order wrong and the matching enforcer reverts
+// (or, worse, silently mis-reads its cap). These must stay in lockstep with the
+// deployed enforcers.
 
 function termsSystemAllowlist(world: Address, allowedSystems: Hex[]): Hex {
   return encodeAbiParameters(parseAbiParameters("address, bytes32[]"), [world, allowedSystems]);
@@ -262,11 +268,17 @@ export async function signDelegation(
   const unsigned: UnsignedDelegation = {
     delegate: params.delegate,
     delegator: player.address,
+    // ROOT_AUTHORITY marks this as a root (un-chained) delegation: the player is
+    // the original authority, not redelegating an authority granted to them.
     authority: ROOT_AUTHORITY,
     caveats: params.caveats,
     salt: params.salt ?? 0n,
     maxRedemptions,
   };
+  // The EIP-712 message intentionally omits `signature` — only the six fields in
+  // DELEGATION_TYPES.Delegation are hashed, and they must match the on-chain
+  // struct field-for-field or recovery yields the wrong signer. The signature is
+  // attached after, producing the SignedDelegation returned below.
   const signature = await player.signTypedData({
     domain: eip712Domain(params.chainId, params.delegationManager),
     types: DELEGATION_TYPES,
@@ -276,13 +288,25 @@ export async function signDelegation(
   return { ...unsigned, signature };
 }
 
-/** abi.encode(Delegation) — the permissionContext the manager decodes. */
+/**
+ * abi.encode(Delegation) — the permissionContext the manager decodes.
+ *
+ * Unlike `encodeExecution` (raw packing), this is full ABI encoding via the
+ * DELEGATION_TUPLE fragment, which DOES include `signature` (the manager needs
+ * it to recover the delegator and verify each caveat). The component order here
+ * must match both the on-chain struct and DELEGATION_TYPES.
+ */
 export function encodePermissionContext(signed: SignedDelegation): Hex {
   return encodeAbiParameters(DELEGATION_TUPLE, [signed]);
 }
 
 /** ERC-7579 single-execution packing: target(20) ++ value(32) ++ callData. */
 export function encodeExecution(target: Address, value: bigint, callData: Hex): Hex {
+  // ERC-7579 "single" execution mode is NOT ABI-encoded: it is the raw byte
+  // concatenation of a 20-byte target, a 32-byte (left-padded) value, and the
+  // remaining bytes as callData. The manager slices these by fixed offset, so
+  // padding `value` to exactly 32 bytes is load-bearing — an unpadded value
+  // would shift the callData boundary and corrupt the decode.
   return concatHex([target, pad(numberToHex(value), { size: 32 }), callData]);
 }
 

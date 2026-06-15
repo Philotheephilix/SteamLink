@@ -43,6 +43,9 @@ import { ENTRY_FEE_USDC } from "./config";
 // ── Sealed-hand secrets layer (real AES-256-GCM) ─────────────────────────────
 // `secrets` lives on the shared global store (below) so a hand sealed in the
 // instrumentation (auto-start) context can be revealed in a route-handler context.
+// A hand is sealed so ONLY its owner can reveal it: the reveal succeeds only when
+// the caller's address equals the seat that owns the hand. This is what keeps one
+// player from reading another's cards even though all hands live in this one process.
 function ownerCondition(): AccessCondition[] {
   return [{ chain: "base-sepolia", method: "ownerOf", returns: { comparator: "=", value: ":userAddress" } }];
 }
@@ -371,6 +374,9 @@ export async function move(
         const effect = g.game.play(player, card, chosenColor);
         const newCount = g.game.handCount(player);
         const activeColor = g.game.activeColor;
+        // The on-chain TurnManager must advance by the SAME number of seats the
+        // in-memory engine already advanced: a Skip/Draw-Two/WD4 skips the next
+        // seat (move the cursor 2), everything else moves it 1.
         const advanceBy = effect.skipped >= 1 ? 2 : 1;
 
         // 2) If direction flipped (Reverse, >2 players), reflect it on-chain first.
@@ -384,10 +390,14 @@ export async function move(
           value: card.value,
           activeColor,
           newHandCount: newCount,
+          // On a winning play (hand emptied) the action effect was short-circuited
+          // in the engine, so don't apply the skip — advance a single seat.
           advanceBy: newCount === 0 ? 1 : advanceBy,
         });
 
-        // 4) Reseal the mover + any forced-draw target.
+        // 4) Re-encrypt every hand that changed this move so the next reveal sees
+        //    the new contents: the mover (played a card) and, for Draw Two / Wild
+        //    Draw Four, the target that was forced to draw 2/4 cards.
         await reseal(g, player);
         if (effect.forcedDrawTarget) await reseal(g, effect.forcedDrawTarget);
 
@@ -406,6 +416,8 @@ export async function move(
       // DRAW
       const { playable } = g.game.draw(player);
       const newCount = g.game.handCount(player);
+      // If the drawn card is immediately playable the engine keeps the same turn
+      // (the player may now play it), so the on-chain cursor must NOT advance (0).
       const advanceBy = playable ? 0 : 1;
       const mv = await redeemMove(e, reviveSigned(signedGameplay), g.roomId, "draw", { newHandCount: newCount, advanceBy });
       await reseal(g, player);

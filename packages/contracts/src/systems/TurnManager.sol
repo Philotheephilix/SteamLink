@@ -88,11 +88,13 @@ contract TurnManager is System {
         authorized[_admin] = true;
     }
 
+    /// @notice Grant or revoke a caller's right to mutate turn state (admin-only).
     function authorize(address caller, bool ok) external onlyAdmin {
         authorized[caller] = ok;
         emit TurnManager_Authorized(caller, ok);
     }
 
+    /// @notice Wire the World as the trusted redemption router (admin-only, one-time).
     function setTrustedRouter(address router) external onlyAdmin {
         _setTrustedRouter(router);
     }
@@ -127,6 +129,9 @@ contract TurnManager is System {
     }
 
     // ── lifecycle ──
+    /// @notice Seat the given player order and start the first turn (authorized only).
+    /// @dev `turnBlocks` is the per-turn deadline length; the first deadline is set
+    ///      `turnBlocks` blocks ahead of the current block.
     function startTurns(uint256 roomId, address[] calldata order, uint64 turnBlocks) external onlyAuthorized {
         if (order.length == 0) revert TurnManager_EmptyOrder();
         if (turnBlocks == 0) revert TurnManager_BadTurnBlocks();
@@ -158,6 +163,7 @@ contract TurnManager is System {
         emit TurnManager_Advanced(roomId, t.current, t.turnIndex, t.deadlineBlock);
     }
 
+    /// @notice Set rotation direction for a room (>=0 forward, <0 reverse; authorized only).
     function setDirection(uint256 roomId, int8 direction) external onlyAuthorized {
         Turn storage t = _turn[roomId];
         if (!t.active) revert TurnManager_NotActive(roomId);

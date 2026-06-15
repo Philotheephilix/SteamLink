@@ -165,6 +165,8 @@ async function settleOnChain(e: MonopolyEngine, g: Game, s: Settlement): Promise
   if (s.amount <= 0) return null;
   const fromId = s.from.toLowerCase();
   const seat = g.delegs[fromId];
+  // Only a player who joined (cached a budget delegation AND paid the buy-in) can be
+  // charged real USDC; bots/observers without a funded budget play money-free.
   if (!seat?.signedBudget || !seat.paid) return null; // unfunded/observer — skip real charge
   const amountUsdc = dollarsToUsdc(s.amount);
   if (Number(amountUsdc) <= 0) return null;
@@ -439,7 +441,11 @@ async function runAction(
         return { log, recordTx };
       }
       console.log(`[monopoly-backend] END ${g.names[player.toLowerCase()]} sameTurn=${adv.sameTurn} next=${adv.nextPlayer ? g.names[adv.nextPlayer] : "none"}`);
+      // Doubles let a player roll again (sameTurn) → no advance. Otherwise record the
+      // end-turn on-chain and roll the on-chain cursor forward to the next solvent seat.
       if (!adv.sameTurn) {
+        // Only redeem endTurn while the chain STILL shows this player as current —
+        // otherwise the turn-bound gameplay caveat would reject it.
         const onchain = await getCurrentTurn(e, g.roomId).catch(() => null);
         if (onchain && onchain.toLowerCase() === player.toLowerCase() && seat?.signedGameplay) {
           await withNonceRetry(() => redeemEndTurn(e, seat.signedGameplay!, g.roomId)).then((r) => (recordTx = r.txHash)).catch((err) => {
@@ -469,6 +475,8 @@ async function runAction(
   // Record the action on-chain via the player's gameplay delegation (turn-bound,
   // gasless) — skip for "roll" (rollAndMove already recorded it).
   if (action !== "roll" && seat?.signedGameplay) {
+    // Record the player's own debit for this action on-chain, in USDC base units
+    // (6 decimals → ×1e6). Only the amount the acting player paid is logged.
     actionAmount = BigInt(settlements.find((s) => s.from === player.toLowerCase())?.amount ?? 0) * 1_000_000n;
     await recordPlayerAction(e, g, player, actionTagStr, actionSpace, actionAmount).then((t) => (recordTx = recordTx ?? t)).catch(() => {});
   }
@@ -504,6 +512,8 @@ async function afterStateChange(e: MonopolyEngine, g: Game): Promise<void> {
   const snap = g.rules.snapshot();
   for (const p of snap.players) {
     if (!p.bankrupt) continue;
+    // Record each bankruptcy on-chain exactly once: a `bankrupt:<id>` sentinel in
+    // lastTx guards against re-recording on every subsequent state change.
     if (g.lastTx[`bankrupt:${p.id}`]) continue;
     g.lastTx[`bankrupt:${p.id}`] = "0x" as Hex;
     await withNonceRetry(() => recordBankrupt(e, g.roomId, p.id as Address)).catch(() => {});
@@ -513,7 +523,7 @@ async function afterStateChange(e: MonopolyEngine, g: Game): Promise<void> {
 
 async function maybeSettleWinner(e: MonopolyEngine, g: Game): Promise<void> {
   if (g.settled || !g.rules.winner) return;
-  g.settled = true;
+  g.settled = true; // claim the settle slot up-front so concurrent acts can't double-pay
   const winner = g.rules.winner as Address;
   const eliminated = g.rules.players.filter((p) => p.bankrupt).map((p) => g.names[p.id]);
   try {

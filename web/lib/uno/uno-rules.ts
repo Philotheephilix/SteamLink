@@ -120,5 +120,7 @@ export function cardLabel(c: UnoCard): string {
     c.value <= 9
       ? String(c.value)
       : { [SKIP]: "skip", [REVERSE]: "reverse", [DRAW_TWO]: "draw two", [WILD]: "wild", [WILD_DRAW_FOUR]: "wild draw four" }[c.value] ?? "?";
+  // Wild/WD4 have no intrinsic color (color 0), so label them by value alone
+  // ("wild"); every other card reads as "<color> <value>" (e.g. "green skip").
   return isWildCard(c) && c.value >= WILD ? valueName : `${colorName} ${valueName}`;
 }
