@@ -41,14 +41,55 @@ export interface Bundle {
   /**
    * Deterministic idempotency key (e.g. `pot:<room>:refund:<recipient>:<round>`).
    * The relayer dedupes by this key so a retried submit cannot double-pay (H4).
+   * On the 1Shot public relayer this becomes the bundle `taskId`.
    */
   idempotencyKey?: string;
+  /**
+   * Structured ERC-7710 permission context (the signed delegation chain) for the
+   * 1Shot public relayer's `relayer_send7710Transaction`. When present the adapter
+   * relays this chain plus `encodedTxns` (mapped to executions) directly; the
+   * single abi-encoded `delegationContext` Hex is the legacy REST shape.
+   */
+  permissionContext?: readonly RelayDelegation[];
+  /** Optional EIP-7702 authorizations folded into the same relayed bundle. */
+  authorizationList?: readonly SignedAuthorization7702[];
 }
 
 export interface EncodedCall {
   to: Address;
   data: Hex;
   value?: bigint;
+}
+
+/** An ERC-7710 caveat as the 1Shot public relayer expects it on the wire. */
+export interface RelayCaveat {
+  enforcer: Address;
+  terms: Hex;
+  args: Hex;
+}
+
+/**
+ * A signed ERC-7710 delegation in a relayer `permissionContext`. The `delegate`
+ * is who may redeem (the relayer's `targetAddress`); the `delegator` is the
+ * player who signed once at `joinRoom()`.
+ */
+export interface RelayDelegation {
+  delegate: Address;
+  delegator: Address;
+  authority: Hex;
+  caveats: RelayCaveat[];
+  salt: Hex;
+  signature: Hex;
+}
+
+/** An EIP-7702 signed authorization tuple, folded inline into a relayed bundle. */
+export interface SignedAuthorization7702 {
+  address: Address;
+  chainId: number | string;
+  nonce: number | string;
+  r: Hex;
+  s: Hex;
+  yParity: number | string;
 }
 
 export interface BundleHandle {
