@@ -3,6 +3,10 @@
 [![Docs](https://img.shields.io/badge/Docs-steamlink.vercel.app%2Fdocs-e4572e?logo=readthedocs&logoColor=white&style=for-the-badge)](https://steamlink.vercel.app/docs)
 [![Base Sepolia](https://img.shields.io/badge/Base-Sepolia%C2%B784532-0052ff?logo=coinbase&logoColor=white&style=for-the-badge)](https://sepolia.basescan.org)
 [![npm @steamlink/core](https://img.shields.io/npm/v/@steamlink/core?label=%40steamlink%2Fcore&style=for-the-badge&color=cb3837&logo=npm)](https://www.npmjs.com/package/@steamlink/core)
+[![Feedback](https://img.shields.io/badge/Feedback-ERC--7710%20%C2%B7%20x402%20%C2%B7%201Shot-8957e5?logo=github&logoColor=white&style=for-the-badge)](https://github.com/Philotheephilix/SteamLink/blob/main/feedback.md)
+
+> 📝 **Integration feedback** on the infra we built on — ERC-7710, x402, and 1Shot — is in
+> [`feedback.md`](https://github.com/Philotheephilix/SteamLink/blob/main/feedback.md).
 
 **Fully onchain, turn-based games on Base — one signature, then every move is gasless and every
 payment is bounded on-chain.** SteamLink is a game-engine SDK (engine name: *Nexus*). A player signs
