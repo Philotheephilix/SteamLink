@@ -1,185 +1,139 @@
 # AGENTS.md — Navigation map for SteamLink / Nexus
 
-> Canonical map for an AI reviewer. Repo "SteamLink", engine "Nexus".
+> Canonical map for an AI reviewer or agent. Repo **"SteamLink"**, engine **"Nexus"**.
+> Start here, then jump to the file-level pointers below. Companion maps:
+> [`web/AGENTS.md`](web/AGENTS.md) (the Next.js mono-app) and
+> [`packages/contracts/SECURITY.md`](packages/contracts/SECURITY.md) (on-chain
+> security model + audit status — read before reviewing any Solidity).
 
 ## System summary
 
 Nexus is a fully on-chain, turn-based game engine for **Base**. A player signs
-**one** ERC-7710 / EIP-712 delegation when they join a room; the backend relayer
+**one** ERC-7710 / EIP-712 delegation when they join a room; a backend relayer
 redeems that single delegation for everything afterward — **gasless moves** (no
 wallet popups) and **x402 USDC payments** bounded by on-chain spend caps. Game
-state lives in an on-chain ECS World; settlement (entry fees, winner payout) runs
-through a trustless `Pot`. The architecture is **mainnet-ready** and is **deployed
-and verifiable live on Base Sepolia** (see `examples/*/deployments/`).
+state lives in an on-chain ECS World; entry fees + winner payout settle through an
+escrow `Pot`. Live and verifiable on **Base Sepolia** today; **mainnet cutover is
+gated on the pre-mainnet security review** (see `SECURITY.md`).
 
-## Repository map
+## Repository map (current)
 
-A pnpm + turborepo monorepo. `packages/*` is the SDK; `examples/*` are real,
-on-chain reference games.
+A pnpm + turborepo monorepo. **Local package names are `@nexus/*`; they are
+published to npm as `@steamlink/*`** (the `web` app imports the published
+`@steamlink/*`). Three top-level areas:
+
+| Path | What it is |
+|---|---|
+| `packages/*` | The SDK + Solidity engine (the reusable product). |
+| `web/` | The **Next.js 15 mono-app**: the marketing site, the `/docs` page, and BOTH reference games (UNO + Monopoly) as routes. See [`web/AGENTS.md`](web/AGENTS.md). |
+| `scripts/` | Live, zero-mock integration harness (`scripts/live/*`) run against a local anvil + Base Sepolia. |
+| `docs/roadmap/` | The 13-phase execution roadmap (`README.md` + `phase-NN-*.md`). |
+
+> **Note:** `examples/*` no longer exists — the reference games were merged into
+> the `web/` mono-app (`web/lib/uno`, `web/lib/monopoly`). Any old pointer to
+> `examples/uno/...` now maps to `web/lib/uno/...`.
 
 ### packages/types — canonical branded types + error surface
-- `src/errors.ts` → `NexusError` class + `NEXUS_ERROR_CODES` (e.g. `NOT_YOUR_TURN`, `BUDGET_EXCEEDED`, `PAYMENT_REQUIRED`); `codeFromRevert()` maps on-chain reverts to typed codes. Imported by every package.
-- `src/branded.ts`, `src/chain.ts` → branded `Address`/`Hex`/`TokenSymbol`; `chain` is strictly `"base"`.
+- `src/errors.ts` → `NexusError` class + error codes (`NOT_YOUR_TURN`, `BUDGET_EXCEEDED`, `PAYMENT_REQUIRED`, `TARGET_MISMATCH`, …). Imported by every package.
+- `src/branded.ts`, `src/chain.ts` → branded `Address`/`Hex`; `chain` is strictly `"base"`.
 
 ### packages/core — game definition, codegen, delegation engine
-- `src/schema/defineGame.ts` → `defineGame()`: the single source of truth (tables + systems + economy). Eager validation; everything else derives from it.
-- `src/codegen/solidity.ts` / `src/codegen/manifest.ts` → emit the `<Game>Tables` Solidity library + deploy manifest so the on-chain World and TS client share one schema.
-- `src/delegation/eip712.ts` → the EIP-712 `GameDelegation` schema; **must match `NexusDelegationManager.sol` byte-for-byte**.
-- `src/delegation/engine.ts` → `buildGameplayCaveats` / `buildBudgetCaveats`, `signDelegation` (the one signature), `buildMoveExecution` / `buildChargeExecution` / `buildChargeFromExecution`, `buildRedeemCalldata` (`manager.redeemDelegations` calldata).
+- `src/schema/defineGame.ts` → `defineGame()`: the single source of truth (tables + systems + economy). Eager validation; everything derives from it.
+- `src/codegen/{solidity,manifest}.ts` → emit the Solidity table library + deploy manifest so the on-chain World and TS client share one schema.
+- `src/delegation/eip712.ts` → the EIP-712 `Delegation` schema; **must match `NexusDelegationManager.sol` byte-for-byte** (there is a live cross-check test in `scripts/live`).
+- `src/delegation/engine.ts` → `buildGameplayCaveats` / `buildBudgetCaveats`, `signDelegation` (the one signature), `buildMoveExecution` / `buildChargeFromExecution`, `buildRedeemCalldata`.
+- `src/delegation/types.ts` → `SignedDelegation`, `Caveat`, `DeploymentAddresses`.
 - `src/randomness/` → randomness facade (commit-reveal / fast tiers).
-- `src/index.ts` → package barrel.
 
 ### packages/contracts — Solidity (Foundry): World, systems, enforcers, escrow
-- `src/world/World.sol` → ECS root: table/system registry + `call` router; **the redemption seam** — when `msg.sender == trustedForwarder` it resolves the on-behalf-of player from the ERC-2771 trailing bytes and appends it to the system calldata.
-- `src/world/IWorld.sol` → World interface + canonical `Store_*` events the indexer subscribes to.
-- `src/system/System.sol` → base for every system; `_msgSender()` recovers the canonical player from the trailing bytes (systems must never read `msg.sender` for attribution).
-- `src/delegation/NexusDelegationManager.sol` → **security-critical.** On-chain ERC-7710 redemption manager: verifies the EIP-712 signed delegation (ECDSA + ERC-1271 via `SignatureChecker`), runs each caveat's before/after hooks, then executes the single delegated action into the target with the ERC-2771 sender append. `redeemDelegations()`.
-- `src/delegation/IDelegation.sol` → minimal local ERC-7710 interfaces (`ICaveatEnforcer`, `IDelegationManager`), signature-compatible with the MetaMask framework.
-- `src/enforcers/` → caveat enforcers (**security-critical**): `TurnBoundEnforcer.sol` (redeem only on your turn, reads TurnManager), `ERC20TransferAmountEnforcer.sol` (lifetime spend cap), `LimitedCallsEnforcer.sol` (max redemptions). Plus per-action / allowed-recipients / timestamp / system-allowlist enforcers.
-- `src/Pot.sol` → trustless USDC escrow per room; `settle()` pays the winner balance − rake; settlement is authority-gated, admin-keyless.
-- `src/randomness/RandomnessCoordinator.sol` → fully on-chain randomness: commit-reveal (trustless) + fast/prevrandao (low-stakes); documented VRF seam.
-- `test/*.t.sol` → Foundry tests (incl. `NexusDelegationManager.t.sol`, `SenderSpoofing.t.sol`, `ManagerHardening.t.sol`, `BudgetEnforcers.t.sol`). `test/mocks/*` are test fixtures.
+**Security-critical. Read [`SECURITY.md`](packages/contracts/SECURITY.md) first.**
+- `src/delegation/NexusDelegationManager.sol` → on-chain ERC-7710 redemption manager: verifies the EIP-712 signature (ECDSA + ERC-1271 via OZ `SignatureChecker`), runs each caveat's before/after hooks, executes the action with the ERC-2771 sender append. **Deny-by-default**: rejects caveat-less / zero-enforcer delegations; enforces `maxRedemptions`.
+- `src/delegation/IDelegation.sol` → minimal ERC-7710 interfaces (`ICaveatEnforcer`, `IDelegationManager`), signature-compatible with the MetaMask framework.
+- `src/enforcers/*` → the on-chain authorization boundary (the only thing bounding the relayer): `TurnBoundEnforcer`, `SystemAllowlistEnforcer`, `TimestampEnforcer`, `LimitedCallsEnforcer`, `PerActionCapEnforcer`, `ERC20TransferAmountEnforcer` (lifetime cap), `AllowedRecipientsEnforcer`. Stateful enforcers key state on `(caller, delegationHash)` so a direct griefer can't poison the manager's counters (audit C1); budget enforcers pin `transferFrom.from == delegator` (H1).
+- `src/world/World.sol` → ECS root: table/system registry + `call` router; **the redemption seam** (resolves the on-behalf-of player from the ERC-2771 trailing bytes only when `msg.sender == trustedForwarder`). `lockSystem()` freezes a system impl (H4).
+- `src/system/System.sol` → base for every system; `_msgSender()` recovers the canonical player (fail-closed: never falls back to `msg.sender` when unwired).
+- `src/systems/TurnManager.sol` → turn order + AFK `timeout` (grace window + seated-participant gate, H5).
+- `src/Pot.sol` → USDC escrow per room. **Hardened (audit C2):** two-step **timelocked** settlement (`proposeWinner` → `executeSettle`), a separate **guardian** (pause + cancel), **pull payments** (`owed`/`withdraw`), and a **`refund()` timeout**.
+- `src/randomness/RandomnessCoordinator.sol` → on-chain randomness; producers gated to authorized callers (C3); VRF is a documented seam.
+- `test/*.t.sol` → Foundry tests (108, incl. `ManagerHardening`, `SenderSpoofing`, `BudgetEnforcers`, `Pot`, `Randomness`). `test/mocks/*` are fixtures.
+- `script/DeployFull.s.sol` → full local/testnet deployment; writes addresses to `deployments/<chainid>.json`.
 
 ### packages/relayer — the redemption transport (adapter port)
-- `src/port.ts` → `RelayerAdapter` port: **every** redemption (move or payment) reaches chain through this one interface. `Bundle`, `RelayerCapabilities`, `StatusEvent`.
-- `src/direct.ts` → `DirectRelayer`: self-relay via a funded viem account (default for devnet/e2e/examples; this is the relayer EOA redeeming on Base Sepolia).
-- `src/oneshot.ts` → `OneShotRelayer`: production 1Shot permissionless relayer (gas in stablecoins, EIP-7702 EOA upgrades, HMAC webhook-verified status).
+- `src/port.ts` → `RelayerAdapter` port: **every** redemption reaches chain through this one interface. `Bundle` (+ structured `permissionContext` / `authorizationList`), `RelayerCapabilities`, `StatusEvent`.
+- `src/direct.ts` → `DirectRelayer`: self-relay via a funded viem account (devnet/e2e/the live games today).
+- `src/oneshot.ts` → `OneShotRelayer`: REST-style 1Shot adapter (HMAC webhook-verified status).
+- `src/oneshot-public.ts` → `OneShotPublicRelayer`: the **real 1Shot Permissionless Public Relayer** (JSON-RPC / OpenRPC) — `relayer_getCapabilities` / `getFeeData` / `estimate7710` / `send7710Transaction` / `getStatus`; ERC-7710 delegated bundles, gas paid in a stablecoin. Offline-tested via injected `fetch` (`oneshot-public.test.ts`).
 
 ### packages/backend — gateway, rooms/sessions, lifecycles, indexer, pots
-- `src/compose/createBackend.ts` → composition root: wires adapters + RoomService + PotService + awaiting + webhook into a `Backend`.
-- `src/gateway/server.ts` / `src/gateway/routes.ts` → stateless Hono app + framework-agnostic handlers (join / move / charge / state / subscribe / webhook / healthz).
-- `src/rooms/RoomService.ts` → room lifecycle + sessions; holds the signed delegation for later redemption. `src/rooms/caveats.ts` → server-side caveat-sanity guard (defense in depth complementing on-chain enforcers).
-- `src/lifecycles/move.ts` → `handleMove`: redeems the **gameplay** delegation through the relayer. `src/lifecycles/charge.ts` → `handleCharge`: issues a 402, redeems the **budget** delegation as a USDC transfer. `src/lifecycles/webhook.ts` → verifies HMAC, dedupes, confirms charge settlement on-chain, emits `StatusEvent`.
-- `src/indexer/` → `InMemoryIndexer` (default) + `nexus-indexer.ts` (documented Postgres/WS seam, phase-06).
-- `src/pots/PotService.ts` → smart-account escrow; settles via delegation redemption (no custodial transfer).
+- `src/compose/createBackend.ts` → composition root (adapters + RoomService + PotService + webhook).
+- `src/gateway/{server,routes}.ts` → stateless Hono app + handlers (join / move / charge / state / subscribe / webhook / healthz).
+- `src/rooms/RoomService.ts` → room + session lifecycle; holds the signed delegation. `src/rooms/caveats.ts` → server-side caveat-sanity guard (defense in depth).
+- `src/lifecycles/{move,charge,webhook}.ts` → redeem gameplay / budget delegations; verify HMAC + confirm settlement.
+- `src/indexer/`, `src/pots/PotService.ts` → indexer seam + escrow settlement.
 
 ### packages/server — x402 monetization middleware + facilitator
-- `src/monetize.ts` → `createMonetizeHandler`: framework-agnostic x402 gate (issues 402 challenges, verifies redemptions, maps errors to HTTP status). `src/adapters/{express,hono}.ts` wrap it.
-- `src/facilitator/delegation-facilitator.ts` → default facilitator: verifies redemptions on Base via receipt reading, with nonce replay protection + finality depth.
+- `src/monetize.ts` → `createMonetizeHandler`: framework-agnostic x402 gate. `src/adapters/{express,hono}.ts`.
+- `src/facilitator/delegation-facilitator.ts` → verifies redemptions on Base (receipt reading, nonce replay protection, finality depth).
 
 ### packages/secrets — sealed secret state (Lit Protocol)
-- `src/lit.ts` → `LitSecrets` (default, network-gated): threshold `seal` / conditional `reveal` / TEE `verify`. Credentials live backend-only.
-- `src/local.ts` → `LocalSecrets`: offline AES-256-GCM adapter for dev/tests.
-- `src/index.ts` → port + adapters + policy registry + move-rule codec.
+- `src/lit.ts` → `LitSecrets` (default, network-gated): `seal` / conditional `reveal` / `verify`. `src/local.ts` → `LocalSecrets` (offline AES-256-GCM for dev/tests). `src/index.ts` → port + policy registry + move-rule codec.
 
 ### packages/react — live game-state hooks
-- `src/provider/NexusProvider.tsx` → root provider; owns one `SubscriptionManager` (transport seam to the gateway feed).
-- `src/hooks/` → `useTable`, `useTurn`, `useGameActions`, `useCharge`, `usePot`, `useSession`. `src/optimistic/` → optimistic-UI store + reconcile (on-chain truth wins).
+- `src/provider/NexusProvider.tsx` → root provider (one `SubscriptionManager`). `src/hooks/*` → `useTable`, `useTurn`, `useGameActions`, `useCharge`, `usePot`, `useSession`. `src/optimistic/*` → optimistic store + reconcile.
 
 ### packages/cli — scaffold, codegen, deploy, devnet
-- `src/cli.ts` → `nexus` CLI: `init`, `codegen`, `deploy`, `dev`, `migrate`, `fork` (in `src/commands/`).
+- `src/cli.ts` → `nexus` CLI: `init`, `codegen`, `deploy`, `dev`, `migrate`, `fork` (`src/commands/`).
 
-### examples/uno — on-chain UNO (Next.js), live on Base Sepolia
-- `lib/game-backend.ts` → **server-only** authority singleton: holds the live game, seals hands, charges entries, redeems moves, settles the pot. `charge()`, `chargeGrant()`, `move()`, `revealHand()`, `storeGrant()`.
-- `lib/engine.ts` → low-level Nexus redemption engine: on-chain randomness, turn setup, `redeemMove`, `chargeEntryFee`, `settlePot`. The relayer EOA is the Pot settle authority.
-- `lib/uno-game.ts` → authoritative full-rules UNO state machine.
-- `lib/delegations.ts` → browser-safe delegation signing (`signGameplayDelegation`, `signBudgetDelegation`) — pure `@nexus/core` + viem, no relayer key.
-- `lib/signer.ts` → wallet abstraction (MetaMask Hybrid DeleGator smart account, or guest localStorage wallet).
-- `lib/erc7715.ts` / `lib/erc7715-settle.ts` → the second wallet rail (see below).
-- `contracts/UnoGameSystem.sol`, `contracts/UnoPot.sol` → on-chain UNO system + escrow.
-- `app/api/{move,charge,grant,start,state,hand,health,new-game}/route.ts` → Next.js route handlers.
-- `deployments/base-sepolia.json` → live deployed addresses (delegationManager, world, enforcers, pot, randomness, unoGame, relayer, usdc).
-
-### examples/monopoly — on-chain Monopoly (out of scope for this map)
+### web/ — the Next.js mono-app (site + docs + both games)
+Full map in [`web/AGENTS.md`](web/AGENTS.md). In brief: `app/page.tsx` (landing),
+`app/docs/page.tsx` (SDK reference + contribute guide), `app/play/{uno,monopoly}/`
+(the games), `app/api/{uno,monopoly}/*` (namespaced route handlers),
+`lib/{uno,monopoly}/*` (server-only game engines), `lib/wallet.ts` +
+`components/wallet/WalletProvider.tsx` (shared connector), `instrumentation.ts`
+(boots both game backends in the Node runtime).
 
 ## End-to-end data flow (one signature → gasless moves + x402)
 
-1. **Define the game.** `examples/uno` is built from a `defineGame(...)` definition (`packages/core/src/schema/defineGame.ts`); `packages/core/src/codegen/solidity.ts` emits the table library and the World/systems are deployed (addresses in `examples/uno/deployments/base-sepolia.json`).
+1. **Define / deploy.** A game is a `defineGame(...)` (`packages/core/src/schema/defineGame.ts`); codegen emits the table library; the World/systems/enforcers/Pot are deployed (addresses in `web/lib/<game>/deployments/base-sepolia.json`).
+2. **Connect a wallet.** `web/lib/wallet.ts` (`connectMetaMask` = MetaMask Hybrid DeleGator smart account; `connectGuest` = localStorage viem account) via `web/components/wallet/WalletProvider.tsx`.
+3. **Sign ONE delegation (gameplay ⊕ budget).** Caveats compiled by `packages/core/src/delegation/engine.ts` (gameplay: turn-bound / system-allowlist / call-limit; budget: per-action + lifetime caps + recipient allowlist), signed once by `signDelegation`. Game-side signing: `web/lib/<game>/delegations.ts`.
+4. **Join the room.** The signed delegation is persisted server-side (`packages/backend/src/rooms/RoomService.ts`, after `caveats.ts` validation). **No further wallet prompt.**
+5. **Gasless move.** Browser/bot POSTs the gameplay delegation to `web/app/api/<game>/{move,act}/route.ts` → `web/lib/<game>/engine.ts` (`redeemRoll`/`redeemAction`/`redeemMove`), which builds calldata via `packages/core` and submits through the relayer (`packages/relayer` — `DirectRelayer` today, or the `oneshot` rail behind `MONOPOLY_RELAYER`).
+6. **On-chain redemption.** `NexusDelegationManager.redeemDelegations` verifies the signature, runs each caveat `beforeHook`, executes into `World.call` with the ERC-2771 player append, runs `afterHook`s. Enforcer rejections surface as typed `NexusError`s.
+7. **x402 charge.** POST to `web/app/api/<game>/charge|act/route.ts` → `web/lib/<game>/engine.ts:chargeFromPlayer`, redeeming the **budget** group as `USDC.transferFrom(player → Pot)` (`buildChargeFromExecution`), bounded on-chain by the per-action + lifetime caps + recipient allowlist.
+8. **Settlement.** On win, the engine drives the hardened `Pot` (`proposeWinner` → after the timelock `executeSettle` → winner `withdraw`s). See `SECURITY.md` for the trust model.
+9. **Status + UI.** Relayer status (webhook or poll) → `StatusEvent` → resolves the pending move/charge; React/UI applies optimistic updates and reconciles on confirmation.
 
-2. **Connect a wallet.** `examples/uno/lib/signer.ts:connectMetaMask` / `connectGuest` yields a signer (a MetaMask Hybrid DeleGator smart account, or a guest viem account).
+## The two wallet rails (in the games)
 
-3. **Sign ONE delegation (gameplay ⊕ budget).** The player signs a single EIP-712 `GameDelegation`. The caveat groups are compiled by `packages/core/src/delegation/engine.ts:buildGameplayCaveats` (turn-bound, system-allowlisted, call-limited) and `buildBudgetCaveats` (per-action + lifetime spend cap, recipient allowlist), and signed by `packages/core/src/delegation/engine.ts:signDelegation` (schema: `packages/core/src/delegation/eip712.ts`). In UNO, `examples/uno/lib/delegations.ts:signGameplayDelegation` / `signBudgetDelegation` drive this.
-
-4. **Join the room.** The signed delegation is persisted server-side: `packages/backend/src/rooms/RoomService.ts:joinRoom`, after `packages/backend/src/rooms/caveats.ts:validateCaveats` rejects over-broad/expired grants. **No further wallet prompt for the rest of the game.**
-
-5. **Gasless move.** Browser/bot POSTs the pre-signed gameplay delegation to `examples/uno/app/api/move/route.ts` → `examples/uno/lib/game-backend.ts:move` (rules-validated) → `examples/uno/lib/engine.ts:redeemMove`. The redemption calldata is built by `packages/core/src/delegation/engine.ts:buildMoveExecution` + `buildRedeemCalldata` and submitted through the relayer (`packages/relayer/src/direct.ts:DirectRelayer.submitBundle`, via the `RelayerAdapter` port). In the SDK backend the equivalent is `packages/backend/src/lifecycles/move.ts:handleMove`.
-
-6. **On-chain redemption.** `packages/contracts/src/delegation/NexusDelegationManager.sol:redeemDelegations` verifies the EIP-712 signature (ECDSA + ERC-1271), runs each caveat's `beforeHook` (`TurnBoundEnforcer`, `LimitedCallsEnforcer`, …), executes the action into `packages/contracts/src/world/World.sol:call` with the ERC-2771 player append, runs `afterHook`s. `World` routes to the system, which recovers the true player via `packages/contracts/src/system/System.sol:_msgSender`. Enforcer rejections surface as typed `NexusError`s (`NOT_YOUR_TURN`, `BUDGET_EXCEEDED`).
-
-7. **x402 charge (entry fee).** Player POSTs to `examples/uno/app/api/charge/route.ts` → `examples/uno/lib/game-backend.ts:charge` → `examples/uno/lib/engine.ts:chargeEntryFee`, redeeming the **budget** caveat group as `USDC.transferFrom(player → Pot)` (`buildChargeFromExecution`), bounded by the on-chain `ERC20TransferAmountEnforcer` cap and recipient allowlist. SDK equivalent: `packages/backend/src/lifecycles/charge.ts:handleCharge` (issues the 402, redeems budget). Verification on the mined webhook: `packages/server/src/facilitator/delegation-facilitator.ts`.
-
-8. **Settlement.** On win, `examples/uno/lib/engine.ts:settlePot` (or `packages/backend/src/pots/PotService.ts:settlePot`) calls `Pot.settle` (`examples/uno/contracts/UnoPot.sol` / `packages/contracts/src/Pot.sol`), paying the winner the pot balance − rake, authority-gated and admin-keyless.
-
-9. **Status + UI.** Relayer status arrives via HMAC-verified webhooks (`packages/backend/src/lifecycles/webhook.ts`) → internal `StatusEvent` → resolves the pending move/charge promise and reconciles the indexer. React hooks (`packages/react/src/hooks/*`) apply optimistic updates and reconcile on the webhook — optimistic UI, on-chain truth.
-
-## The two wallet rails (in the examples)
-
-Both rails redeem a delegation to move USDC; they differ in **which manager**
-verifies and **how the player authorizes**.
-
-- **(a) Custom NexusDelegationManager rail.** The player signs Nexus's raw EIP-712
-  `GameDelegation`. Redemption goes through `packages/contracts/src/delegation/NexusDelegationManager.sol:redeemDelegations`, which verifies the signature with `SignatureChecker` (ECDSA for EOAs, **ERC-1271** for smart accounts). Signing: `examples/uno/lib/delegations.ts`; gameplay + budget caveats from `packages/core/src/delegation/engine.ts`. This rail carries both gameplay moves and the budget/x402 charge for guest wallets.
-
-- **(b) ERC-7715 intuitive-grant rail.** Instead of signing opaque typed data, the
-  player approves a spend through MetaMask's **native** permission popup
-  (`examples/uno/lib/erc7715.ts:connectMetaMaskGrant`, an `erc20-token-periodic`
-  grant). The granted `context` is POSTed to `examples/uno/app/api/grant/route.ts`
-  (`storeGrant`) and later redeemed server-side via the **canonical MetaMask
-  DelegationManager** in `examples/uno/lib/erc7715-settle.ts:chargeViaGrant`,
-  executing a real `USDC.transferFrom(player → Pot)`. Selected at `/api/charge`
-  with `{ grant: true }`.
+- **(a) Custom NexusDelegationManager rail.** Player signs Nexus's raw EIP-712 `Delegation`; redemption verifies via `SignatureChecker` (ECDSA for EOAs, **ERC-1271** for smart accounts). Signing: `web/lib/<game>/delegations.ts`.
+- **(b) ERC-7715 intuitive-grant rail.** Player approves a spend through MetaMask's **native** permission popup (`web/lib/<game>/erc7715.ts`, an `erc20-token-periodic` grant); the granted context is redeemed server-side via the **canonical MetaMask DelegationManager** (`web/lib/<game>/erc7715-settle.ts`).
 
 ## How to run
 
 ```bash
-# Build + test the SDK (from repo root)
 pnpm install
-pnpm build           # turbo run build
-pnpm test            # turbo run test (vitest)
-pnpm typecheck
+pnpm build            # turbo run build (TS packages + web)
+pnpm -r --filter '!@nexus/contracts' test   # vitest
+pnpm lint             # biome check (web/ is linted by its own `next lint`)
 
-# Solidity (Foundry)
-PATH=$HOME/.foundry/bin:$PATH forge test     # in packages/contracts
-PATH=$HOME/.foundry/bin:$PATH forge build
+# Solidity (Foundry) — in packages/contracts
+forge build
+forge test                       # 108 tests
+FOUNDRY_PROFILE=ci forge test    # 1000 fuzz runs (CI profile)
 
-# Run an example (UNO), live against Base Sepolia
-cd examples/uno
-pnpm dev             # next dev on :3100
-pnpm bots            # in-process bot players
-pnpm test:e2e        # Playwright e2e (verified on Base Sepolia)
-pnpm demo            # recorded full-game gameplay video
+# The mono-app (site + docs + both games)
+cd web && pnpm dev    # next dev on :3000  → /, /docs, /play/uno, /play/monopoly
+
+# Live zero-mock integration (spins its own anvil)
+pnpm --filter @nexus/scripts exec tsx live/local-integration.ts
 ```
 
-**Deployments** (live, verifiable addresses) live in
-`examples/<game>/deployments/base-sepolia.json` (and `84532.json`): World,
-NexusDelegationManager, the enforcer set, Pot, RandomnessCoordinator, the game
-system, the relayer EOA, and USDC.
+CI: `.github/workflows/ci.yml` — three jobs (Contracts forge / TS packages / live-anvil), all green on `main`.
 
-## For reviewers
+## For reviewers — start here
 
-- **Security-critical code.**
-  - `packages/contracts/src/delegation/NexusDelegationManager.sol` — signature
-    verification (ECDSA + ERC-1271 via `SignatureChecker`), caveat before/after
-    hook ordering, and the ERC-2771 sender append. Hardening tests:
-    `packages/contracts/test/{NexusDelegationManager,ManagerHardening,SenderSpoofing,MsgSenderResolution}.t.sol`.
-  - `packages/contracts/src/enforcers/*` — the on-chain authorization boundary
-    (turn gating, per-action + lifetime spend caps, recipient/system allowlists).
-    Tests: `test/{Enforcers,BudgetEnforcers}.t.sol`.
-  - `packages/contracts/src/system/System.sol:_msgSender` — player attribution;
-    systems must never trust raw `msg.sender`.
-  - `packages/backend/src/rooms/caveats.ts` — server-side defense in depth before
-    a delegation is ever stored.
-
-- **Relayer key boundary.** The relayer / signing key lives **only in the
-  backend** — `packages/relayer/src/direct.ts` (funded EOA), the example
-  `examples/uno/lib/config.ts` + `lib/engine.ts` + `lib/erc7715-settle.ts` (all
-  marked server-only). The browser holds **only** the player's signer; it never
-  sees the relayer key, Lit credentials, or the Pot authority. Browser-safe
-  signing is isolated in `examples/uno/lib/delegations.ts`.
-
-- **On-chain invariants.**
-  - **Base only** — `chain` is strictly `"base"`; no multi-chain abstraction.
-  - **One delegation per player per room** — a single EIP-712 grant carries both
-    the gameplay and budget caveat groups; no flow re-prompts mid-game.
-  - **Capabilities are the source of truth** — payment/fee tokens and the relayer
-    `targetAddress` come from `relayer_getCapabilities` and are cached; a
-    `targetAddress` mismatch is rejected before a bundle is submitted. Tokens are
-    never hardcoded in the hot path.
-  - **Webhooks drive the hot path** — status comes from HMAC-verified relayer
-    webhooks → internal `StatusEvent`; chain polling is a silent fallback only.
-  - **Everything is an adapter** — relayer, secrets, indexer, facilitator,
-    randomness each sit behind a TypeScript port with a default impl.
-  - **Optimistic UI, on-chain truth** — apply optimistic updates, reconcile on the
-    webhook; enforcer rejections surface as typed `NexusError`s.
-  - **Pot settlement is admin-keyless** — only the registered settle authority may
-    pay out; payout is the pot balance minus rake.
+- **Security model + audit status:** [`packages/contracts/SECURITY.md`](packages/contracts/SECURITY.md). The pre-mainnet audit findings (C1–C3, H1–H5, mediums) and exactly how each was fixed + which test proves it. **Read before reviewing any Solidity.**
+- **Security-critical code:** `NexusDelegationManager.sol` (sig verification, caveat hook ordering, ERC-2771 append), `src/enforcers/*` (the authorization boundary), `src/system/System.sol:_msgSender` (player attribution), `src/Pot.sol` (custody), `packages/backend/src/rooms/caveats.ts` (server-side defense in depth).
+- **Relayer-key boundary:** the funded relayer / signing key lives **only** in the backend (`packages/relayer/src/direct.ts`, `web/lib/<game>/config.ts`, all marked server-only). The browser holds only the player's signer; browser-safe signing is isolated in `web/lib/<game>/delegations.ts`.
+- **On-chain invariants:** Base only (`chain === "base"`); one delegation per player per room (no mid-game re-prompt); capabilities are the source of truth (never hardcode tokens; reject `targetAddress` mismatch); webhooks drive the hot path; everything is an adapter; optimistic UI, on-chain truth.
